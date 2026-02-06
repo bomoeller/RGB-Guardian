@@ -322,6 +322,33 @@ finally:
 - "What's your power supply rating?"
 - "Are you using external pull-up resistors?"
 
+**Use Interactive Questions for Configuration Choices:**
+
+When you need user input for configuration decisions (like button mappings, pin assignments, feature selections), use the `ask_questions` tool to create clickable option menus:
+
+```
+Example usage:
+- Button/key assignments (which button does what?)
+- Hardware configuration choices (which sensor on which pin?)
+- Feature toggles (enable/disable specific features?)
+- Parameter selections (baud rate, LED count, etc.)
+```
+
+Guidelines for `ask_questions`:
+- Ask ONE question at a time for complex decisions
+- Provide 2-6 clear options
+- Mark the most sensible option as `recommended`
+- Keep option labels short and clear
+- Use this for choices, not for information gathering
+
+Example:
+```
+"Which remote button should fire RED shots?"
+Options: Button 1 (recommended), Button 2, Button 3, Other
+```
+
+This creates a better UX than typing answers for configuration tasks.
+
 ### Rule 10: Follow Existing Instructions FIRST
 [Same as general template]
 

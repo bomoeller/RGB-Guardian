@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <FastLED.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 
 // ============================================
 // HARDWARE CONFIGURATION - SELECT YOUR SETUP
@@ -109,7 +112,20 @@ unsigned long lastShotMove = 0;
 unsigned long animationStart = 0;
 uint16_t currentBossSpeed = BOSS_INITIAL_SPEED;
 
-const CRGB colorTable[3] = {CRGB::Red, CRGB::Green, CRGB::Blue};
+const CRGB colorTable[4] = {CRGB::Red, CRGB::Green, CRGB::Blue, CRGB::White};
+
+// ============================================
+// GAME MODE SETTINGS
+// ============================================
+uint8_t numColors = 3;  // 3 or 4 color mode (default: 3)
+
+// ============================================
+// ESP-NOW REMOTE CONTROL VARIABLES
+// ============================================
+volatile uint8_t remoteCommand = 0xFF;  // 0xFF = no command
+volatile uint8_t lastRemoteSequence = 0;
+uint8_t ledBrightness = BRIGHTNESS;     // Current brightness (0-255)
+const uint8_t BRIGHTNESS_STEP = 26;     // Brightness adjustment step (10% of 255)
 
 // ============================================
 // FUNCTION DECLARATIONS
@@ -127,6 +143,10 @@ void renderGame();
 void playWinAnimation();
 void playLoseAnimation();
 bool isBossDefeated();
+void initWiFi();
+void initESPNOW();
+void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
+void processRemoteCommand();
 
 // ============================================
 // SETUP
@@ -173,11 +193,20 @@ void setup() {
   }
   Serial.println("[OK] Buttons ready");
   
+  // Initialize WiFi and ESP-NOW for remote control
+  Serial.println("[INFO] Initializing ESP-NOW remote control...");
+  initWiFi();
+  initESPNOW();
+  Serial.println("[OK] ESP-NOW ready");
+  
   // Initialize game
   Serial.println("[INFO] Initializing game...");
   initGame();
   Serial.println("[OK] Game ready!");
-  Serial.println("[INFO] Button 1=Red, 2=Green, 3=Blue");
+  Serial.println("[INFO] Controls:");
+  Serial.println("[INFO]   Physical: Button 1=Red, 2=Green, 3=Blue, 4=White (4-color mode)");
+  Serial.println("[INFO]   Remote: Button 1=Red, 2=Green, 3=Blue, 4=White (4-color mode)");
+  Serial.println("[INFO]   Remote: Sleep=Toggle 3/4 colors, On=Reset, Higher/Lower=Brightness");
   Serial.println("=================================\n");
   
   // Startup complete
@@ -193,6 +222,7 @@ void setup() {
 // ============================================
 void loop() {
   handleButtons();
+  processRemoteCommand();  // Handle remote control inputs
   
   switch (gameState) {
     case STATE_PLAYING:
@@ -259,7 +289,7 @@ void spawnBoss() {
   // Generate random colors for boss parts
   for (int i = 0; i < MAX_BOSS_PARTS; i++) {
     if (i < numParts) {
-      boss[i].color = random(3);  // 0=Red, 1=Green, 2=Blue
+      boss[i].color = random(numColors);  // Random color from current palette
       boss[i].active = true;
     } else {
       boss[i].active = false;
@@ -271,7 +301,10 @@ void spawnBoss() {
   // Print boss colors
   Serial.print("[DEBUG] Boss colors (front to back): ");
   for (int i = 0; i < numParts; i++) {
-    Serial.print(boss[i].color == 0 ? "RED" : boss[i].color == 1 ? "GREEN" : "BLUE");
+    const char* colorName = boss[i].color == 0 ? "RED" : 
+                            boss[i].color == 1 ? "GREEN" : 
+                            boss[i].color == 2 ? "BLUE" : "WHITE";
+    Serial.print(colorName);
     if (i < numParts - 1) Serial.print(", ");
   }
   Serial.println();
@@ -296,7 +329,7 @@ void respawnBossAfterLifeLoss() {
   lastBossMove = millis();
   
   // Only 1 part with random color
-  boss[0].color = random(3);
+  boss[0].color = random(numColors);
   boss[0].active = true;
   
   // Deactivate all other parts
@@ -305,19 +338,26 @@ void respawnBossAfterLifeLoss() {
   }
   
   Serial.printf("[INFO] Boss respawned at position %d (1 part), speed reset to: %dms\n", bossPosition, currentBossSpeed);
-  Serial.printf("[DEBUG] Boss color: %s\n", boss[0].color == 0 ? "RED" : boss[0].color == 1 ? "GREEN" : "BLUE");
+  const char* colorName = boss[0].color == 0 ? "RED" : 
+                          boss[0].color == 1 ? "GREEN" : 
+                          boss[0].color == 2 ? "BLUE" : "WHITE";
+  Serial.printf("[DEBUG] Boss color: %s\n", colorName);
 }
 
 // ============================================
 // BUTTON HANDLING
 // ============================================
 void handleButtons() {
-  for (int i = 0; i < 3; i++) {  // Only check buttons 1-3
+  // Check buttons based on color mode
+  int buttonsToCheck = (numColors == 4) ? 4 : 3;
+  
+  for (int i = 0; i < buttonsToCheck; i++) {
     bool currentState = digitalRead(buttonPins[i]);
     
     // Detect button press (HIGH to LOW transition)
     if (lastButtonState[i] == HIGH && currentState == LOW && gameState == STATE_PLAYING) {
-      fireShot(i);  // i = 0 (Red), 1 (Green), 2 (Blue)
+      // Direct mapping: Button 1=0(Red), 2=1(Green), 3=2(Blue), 4=3(Yellow)
+      fireShot(i);
     }
     
     lastButtonState[i] = currentState;
@@ -331,8 +371,10 @@ void fireShot(uint8_t color) {
       shots[i].position = PLAYER_SIZE;  // Start just after player
       shots[i].color = color;
       shots[i].rgbColor = colorTable[color];
-      Serial.printf("[DEBUG] Shot %d fired: %s at position %d\n", i, 
-                    (color == 0 ? "RED" : color == 1 ? "GREEN" : "BLUE"), shots[i].position);
+      const char* colorName = color == 0 ? "RED" : 
+                              color == 1 ? "GREEN" : 
+                              color == 2 ? "BLUE" : "WHITE";
+      Serial.printf("[DEBUG] Shot %d fired: %s at position %d\n", i, colorName, shots[i].position);
       return;
     }
   }
@@ -460,8 +502,12 @@ void checkCollisions() {
     
     if (shots[i].position == frontPosition) {
       // Shot hit the front part
-      const char* shotColor = (shots[i].color == 0 ? "RED" : shots[i].color == 1 ? "GREEN" : "BLUE");
-      const char* bossColor = (boss[frontPartIdx].color == 0 ? "RED" : boss[frontPartIdx].color == 1 ? "GREEN" : "BLUE");
+      const char* shotColor = shots[i].color == 0 ? "RED" : 
+                              shots[i].color == 1 ? "GREEN" : 
+                              shots[i].color == 2 ? "BLUE" : "WHITE";
+      const char* bossColor = boss[frontPartIdx].color == 0 ? "RED" : 
+                              boss[frontPartIdx].color == 1 ? "GREEN" : 
+                              boss[frontPartIdx].color == 2 ? "BLUE" : "WHITE";
       
       Serial.printf("[DEBUG] Shot %d (%s) hit boss front at pos %d (boss color: %s)\n", 
                     i, shotColor, frontPosition, bossColor);
@@ -568,5 +614,148 @@ void playLoseAnimation() {
     // Animation done - restart game
     Serial.println("[INFO] Game Over - Restarting...\n");
     initGame();
+  }
+}
+
+// ============================================
+// ESP-NOW REMOTE CONTROL FUNCTIONS
+// ============================================
+void initWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  Serial.println("[ESPNOW] WiFi initialized in Station mode");
+  Serial.print("[ESPNOW] ESP32-C3 MAC Address: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void initESPNOW() {
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("[ESPNOW] ERROR: Failed to initialize ESP-NOW");
+    return;
+  }
+  Serial.println("[ESPNOW] ESP-NOW initialized successfully");
+  
+  // Register receive callback
+  esp_now_register_recv_cb(onDataRecv);
+  Serial.println("[ESPNOW] Receive callback registered");
+  Serial.println("[ESPNOW] Waiting for remote commands...");
+}
+
+void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+  // This runs in interrupt context - keep it SHORT!
+  
+  // Log sender MAC address
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           recv_info->src_addr[0], recv_info->src_addr[1], recv_info->src_addr[2],
+           recv_info->src_addr[3], recv_info->src_addr[4], recv_info->src_addr[5]);
+  
+  // Check packet length (WIZ-remote sends 13 bytes)
+  if (len == 13) {
+    uint8_t sequence = data[1];
+    uint8_t buttonCode = data[6];
+    
+    // Debounce: only process if sequence changed
+    if (sequence != lastRemoteSequence) {
+      lastRemoteSequence = sequence;
+      remoteCommand = buttonCode;
+      
+      Serial.printf("[ESPNOW] Remote: %s, Seq: %d, Button: 0x%02X\n", macStr, sequence, buttonCode);
+    }
+  } else {
+    Serial.printf("[ESPNOW] Unknown packet from %s (length: %d)\n", macStr, len);
+  }
+}
+
+void processRemoteCommand() {
+  // Process pending remote command (runs in main loop, not interrupt)
+  if (remoteCommand == 0xFF) return;  // No command pending
+  
+  uint8_t cmd = remoteCommand;
+  remoteCommand = 0xFF;  // Clear command
+  
+  // Only process commands during gameplay
+  if (gameState == STATE_PLAYING) {
+    switch (cmd) {
+      case 0x10:  // Button 1 - Fire RED shot
+        Serial.println("[REMOTE] Button 1 - Fire RED");
+        fireShot(0);
+        break;
+        
+      case 0x11:  // Button 2 - Fire GREEN shot
+        Serial.println("[REMOTE] Button 2 - Fire GREEN");
+        fireShot(1);
+        break;
+        
+      case 0x12:  // Button 3 - Fire BLUE (always)
+        Serial.println("[REMOTE] Button 3 - Fire BLUE");
+        fireShot(2);  // Blue
+        break;
+        
+      case 0x13:  // Button 4 - Fire WHITE (only in 4-color mode)
+        if (numColors == 4) {
+          Serial.println("[REMOTE] Button 4 - Fire WHITE");
+          fireShot(3);  // White
+        } else {
+          Serial.println("[REMOTE] Button 4 - Not available in 3-color mode");
+        }
+        break;
+        
+      case 0x03:  // Sleep - Toggle 3/4 color mode
+        if (numColors == 3) {
+          numColors = 4;
+          Serial.println("[REMOTE] Sleep - Switched to 4-COLOR mode (Red/Green/Blue/White)");
+        } else {
+          numColors = 3;
+          Serial.println("[REMOTE] Sleep - Switched to 3-COLOR mode (Red/Green/Blue)");
+        }
+        Serial.printf("[INFO] Color mode: %d colors\n", numColors);
+        break;
+        
+      case 0x09:  // Higher - Increase brightness
+        if (ledBrightness < 255 - BRIGHTNESS_STEP) {
+          ledBrightness += BRIGHTNESS_STEP;
+        } else {
+          ledBrightness = 255;
+        }
+        FastLED.setBrightness(ledBrightness);
+        Serial.printf("[REMOTE] Brightness UP: %d\n", ledBrightness);
+        break;
+        
+      case 0x08:  // Lower - Decrease brightness
+        if (ledBrightness > BRIGHTNESS_STEP) {
+          ledBrightness -= BRIGHTNESS_STEP;
+        } else {
+          ledBrightness = BRIGHTNESS_STEP;
+        }
+        FastLED.setBrightness(ledBrightness);
+        Serial.printf("[REMOTE] Brightness DOWN: %d\n", ledBrightness);
+        break;
+        
+      case 0x01:  // On - Reset game
+        Serial.println("[REMOTE] ON - Resetting game");
+        initGame();
+        break;
+        
+      default:
+        Serial.printf("[REMOTE] Unmapped button: 0x%02X\n", cmd);
+        break;
+    }
+  } else {
+    // During animations, allow reset and color mode toggle
+    if (cmd == 0x01) {  // On button
+      Serial.println("[REMOTE] ON - Resetting game");
+      initGame();
+    } else if (cmd == 0x03) {  // Sleep - Toggle color mode
+      if (numColors == 3) {
+        numColors = 4;
+        Serial.println("[REMOTE] Sleep - Switched to 4-COLOR mode (Red/Green/Blue/White)");
+      } else {
+        numColors = 3;
+        Serial.println("[REMOTE] Sleep - Switched to 3-COLOR mode (Red/Green/Blue)");
+      }
+      Serial.printf("[INFO] Color mode: %d colors\n", numColors);
+    }
   }
 }
