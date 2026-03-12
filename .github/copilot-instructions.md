@@ -404,14 +404,16 @@ GPIO10 - WS2812B/WS2815 LED Strip Data (output)
 ```
 
 ### Power Requirements
-- Supply voltage: 5V USB (3.3V logic)
+- Supply voltage:
+    - ESP32-C3 board: 5V USB (3.3V logic)
+    - WS2815 LED strip: 12V external PSU
 - Current consumption: 
   - ESP32-C3: ~60mA
   - WS2812B (30 LEDs): ~1.8A max at full brightness
-  - WS2815 (288 LEDs): ~17A max at full brightness
+    - WS2815 (288 LEDs): current depends on strip spec and brightness
 - Battery life target: N/A (USB/external powered)
 - [WARNING] WS2812B: Use external 5V/2A power supply - do not power 30 LEDs from USB!
-- [WARNING] WS2815: MUST use external 5V/20A power supply - use proper wire gauge!
+- [WARNING] WS2815: MUST use external 12V power supply - use proper wire gauge!
 
 ### Communication Protocols
 - Serial: 115200 baud (USB CDC)
@@ -427,9 +429,9 @@ List with versions:
 ### Hardware Notes
 - ESP32-C3 uses native USB (not UART bridge) - requires special CDC flags
 - Two LED strip configurations available (switch in main.cpp):
-  - WS2812B: 30 LEDs, GRB color order, GPIO8
-  - WS2815: 288 LEDs, RGB color order, GPIO8
-- WS2812B requires precise timing - use GPIO8 (good signal integrity)
+    - WS2812B: 30 LEDs, GRB color order, GPIO10
+    - WS2815: 288 LEDs, RGB color order, GPIO10
+- WS2812B requires precise timing - use GPIO10 (good signal integrity)
 - All buttons use internal pull-ups - wire to GND when pressed
 
 ---

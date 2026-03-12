@@ -1,75 +1,82 @@
 # RGB Guardian - ESP32-C3 SuperMini
 
-PlatformIO project for controlling WS2812B/WS2815 LED strip game with ESP32-C3 SuperMini.
+PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 7 game modes.
 
-## Hardware Configuration
+## Current Setup
 
-**Two configurations available:**
+- Board: ESP32-C3 SuperMini
+- Active strip: WS2815 (288 LEDs)
+- LED data pin: GPIO10
+- LED strip power: external 12V power supply
+- ESP32 power: USB (5V)
 
-### Setup 1: WS2812B (Default)
-- **Board**: ESP32-C3 SuperMini
-- **LED Strip**: WS2812B (30 LEDs)
-- **Data Pin**: GPIO10
-- **Color Order**: GRB
-- **Power**: 5V (ensure adequate power supply for LED strip)
+Optional alternate setup in code:
+- WS2812B (30 LEDs, 5V)
 
-### Setup 2: WS2815
-- **Board**: ESP32-C3 SuperMini
-- **LED Strip**: WS2815 (288 LEDs)
-- **Data Pin**: GPIO10
-- **Color Order**: RGB
-- **Power**: 5V (requires external power supply rated for 288 LEDs)
+## GPIO Mapping
 
-**To switch configurations:** Edit [src/main.cpp](src/main.cpp) and uncomment your desired setup:
-```cpp
-// Uncomment ONE of these:
-#define LED_SETUP_WS2812B_30      // 30 LEDs, WS2812B strip
-// #define LED_SETUP_WS2815_288   // 288 LEDs, WS2815 strip
-```
+Inputs (active-low with internal pull-ups):
+- GPIO0: Red button
+- GPIO1: Green button
+- GPIO2: Blue button
+- GPIO3: White button (4-color modes)
+- GPIO4: Button 5 (currently not used by gameplay)
+- GPIO9: BOOT button
+
+Outputs:
+- GPIO10: LED strip data
+- GPIO5: Red button LED
+- GPIO6: Green button LED
+- GPIO7: Blue button LED
+- GPIO8: White button LED
 
 ## Wiring
 
-```
-ESP32-C3 SuperMini -> LED Strip (WS2812B or WS2815)
-GPIO10             -> DIN (Data In)
-GND                -> GND
-5V                 -> 5V (use external power for WS2815 or >10 LEDs on WS2812B)
+```text
+ESP32-C3 SuperMini -> LED strip
+GPIO10             -> DIN (data in)
+GND                -> strip GND
 
-Game Buttons (connect buttons between GPIO and GND, internal pull-ups enabled):
-GPIO0              -> Red Button (INPUT)
-GPIO1              -> Green Button (INPUT)
-GPIO2              -> Blue Button (INPUT)
-GPIO3              -> White Button (INPUT, 4-color mode)
+WS2815 power supply (external)
++12V               -> strip +12V
+GND                -> strip GND
 
-Button LEDs (optional - for illuminated game buttons):
-GPIO5              -> Red Button LED (OUTPUT)
-GPIO6              -> Green Button LED (OUTPUT)
-GPIO7              -> Blue Button LED (OUTPUT)
-GPIO8              -> White Button LED (OUTPUT)
+Important: ESP32 GND and strip power GND must be connected together.
 ```
 
-## Features
+## Game Modes (Remote Off cycles)
 
-- FastLED library for smooth animations
-- Rainbow cycling animation (default)
-- Configurable brightness and FPS
+1. INVERTED
+2. PRESS-TO-LIGHT
+3. FOLLOW-ME
+4. MEMORY
+5. GHOST BOSS
+6. DUEL
+7. CO-PLAY
 
-## Getting Started
+Mode indicator:
+- Far-end lilac dots show mode number for 2 seconds before mode starts.
 
-1. Connect the LED strip to GPIO10
-2. (Optional) Connect button LEDs to GPIO 5-8
-3. Build and upload: `pio run --target upload`
-4. Monitor serial output: `pio device monitor`
+## Build and Upload
 
-## Power Considerations
+```bash
+pio run
+pio run --target upload
+pio device monitor
+```
 
-**WS2812B (30 LEDs):**
-- 30 LEDs at full brightness can draw up to 1.8A
-- Use an external 5V power supply capable of at least 2A
-- Connect ESP32 GND to power supply GND
+## LED Configuration in Code
 
-**WS2815 (288 LEDs):**
-- 288 LEDs at full brightness can draw up to 17A
-- MUST use external 5V power supply rated for at least 20A
-- Use appropriate wire gauge for high current
-- Connect ESP32 GND to power supply GND
+Edit `src/main.cpp` and select one:
+
+```cpp
+// #define LED_SETUP_WS2812B_30
+#define LED_SETUP_WS2815_288
+```
+
+## Power Notes
+
+- WS2815 uses 12V strip power.
+- WS2812B uses 5V strip power.
+- Do not power the LED strip from the ESP32 USB port.
+- Use a PSU and wire gauge sized for your strip length and brightness.

@@ -1,7 +1,7 @@
 # RGB Guardian - How to Play
 
-**Version:** 1.0  
-**Date:** February 7, 2026
+**Version:** 1.2  
+**Date:** March 12, 2026
 
 ---
 
@@ -20,15 +20,15 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 3. **5 Push Buttons** (for color shooting)
 4. **WIZ-Remote** (optional - for wireless control)
 5. **Power Supply:**
-   - WS2815 (288 LEDs): 5V/20A minimum
+   - WS2815 (288 LEDs): 12V external PSU (size current by strip spec)
    - WS2812B (30 LEDs): 5V/2A minimum
 6. **Jumper wires**
 
 ### Physical Connections
 
 **LED Strip:**
-- LED Data Pin → ESP32-C3 GPIO 8
-- LED +5V → External 5V power supply
+- LED Data Pin → ESP32-C3 GPIO10
+- WS2815 +12V → External 12V power supply
 - LED GND → Common ground (ESP32 + Power Supply)
 
 **Buttons (active-low with internal pull-ups):**
@@ -46,7 +46,7 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 ### Wiring Diagram Notes
 
 ```
-[5V Power Supply] ----+---- [LED Strip +5V]
+[12V Power Supply] ---+---- [LED Strip +12V]
                       |
                       +---- [Common GND] ----+---- [LED Strip GND]
                                              |
@@ -147,32 +147,29 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 | Sleep | Toggle between 3-color and 4-color mode |
 | Higher | Increase LED brightness (+10%) |
 | Lower | Decrease LED brightness (-10%) |
-| Off | (unused) |
+| Off | Cycle Game Mode (1-7) |
 
 **Note:** Physical buttons and remote work simultaneously - use whichever is more comfortable!
 
 ---
 
-## Color Modes
+## Game Modes
 
-### 3-Color Mode (Default)
-- Boss uses: Red, Green, Blue
-- Available shots: Red, Green, Blue
-- Buttons 1-3 active
-- Recommended for beginners
+Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots for 2 seconds before mode starts.
 
-### 4-Color Mode (Advanced)
-- Boss uses: Red, Green, Blue, White
-- Available shots: Red, Green, Blue, White
-- Buttons 1-4 active
-- Toggle with remote "Sleep" button
-- Higher difficulty (more colors to match)
+1. **INVERTED** - Button LEDs on when not pressed
+2. **PRESS-TO-LIGHT** - Button LEDs on when pressed
+3. **FOLLOW-ME** - Helper shows next target color
+4. **MEMORY** - Sequence playback, then player input
+5. **GHOST BOSS** - Boss visibility challenge
+6. **DUEL** - 2-player versus from both ends
+7. **CO-PLAY** - 2-player cooperative expanding boss
 
-**Switching Modes:**
-1. Press "Sleep" button on WIZ-remote
-2. Serial output confirms: "[REMOTE] Sleep - Switched to X-COLOR mode"
-3. Mode persists until toggled again
-4. Can switch anytime (even during animations)
+### 3-color / 4-color toggle
+
+- Remote **Sleep** toggles between 3-color and 4-color palettes
+- 3-color: Red/Green/Blue
+- 4-color: Red/Green/Blue/White
 
 ---
 
@@ -225,7 +222,7 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 ### LEDs Not Lighting Up
 - Check power supply connections (proper voltage/current)
 - Verify all grounds connected together
-- Confirm LED data pin connected to GPIO 8
+- Confirm LED data pin connected to GPIO10
 - Check LED strip type matches code configuration
 
 ### Buttons Not Working
@@ -308,7 +305,7 @@ Connect to serial monitor (115200 baud) to see:
 
 ## Safety Warnings
 
-1. **[WARNING]** 288 LEDs at full brightness draw ~17A - use proper power supply and wire gauge
+1. **[WARNING]** WS2815 strip uses 12V external power, not 5V
 2. **[WARNING]** Do not power LED strips from ESP32 USB port - can damage board
 3. **[WARNING]** Connect all grounds together (power supply, ESP32, LED strip)
 4. **[WARNING]** GPIO2 is strapping pin - avoid holding Button 3 during ESP32 boot
