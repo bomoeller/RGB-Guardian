@@ -139,6 +139,19 @@ enum ButtonLEDMode {
 
 ButtonLEDMode buttonLEDMode = LED_MODE_INVERTED;  // Default mode
 
+// Wired settings mode (Option C: double-chord safety)
+bool settingsModeActive = false;
+bool settingsWaitRelease = false;
+unsigned long settingsChordStart = 0;
+const uint16_t SETTINGS_ENTER_HOLD_MS = 1000;
+const uint16_t SETTINGS_INACTIVITY_TIMEOUT_MS = 10000;
+const uint16_t SETTINGS_RED_LONG_PRESS_MS = 3000;
+ButtonLEDMode settingsSelectedMode = LED_MODE_INVERTED;
+uint8_t settingsSelectedNumColors = 3;
+unsigned long settingsLastInteraction = 0;
+unsigned long settingsRedHoldStart = 0;
+unsigned long lastAnyShotFiredAt = 0;
+
 // Mode change indicator on strip end
 bool modeDotsActive = false;
 unsigned long modeDotsStartTime = 0;
@@ -169,9 +182,13 @@ bool ghostBossVisible = true;
 unsigned long ghostBossModeStartTime = 0;
 unsigned long ghostBossRevealUntil = 0;
 unsigned long ghostBossLastRevealTrigger = 0;
-const uint16_t GHOST_BOSS_INITIAL_VISIBLE_MS = 10000;
+bool ghostBossFadingOut = false;
+unsigned long ghostBossFadeStart = 0;
+const uint16_t GHOST_BOSS_INITIAL_VISIBLE_MS = 5000;
 const uint16_t GHOST_BOSS_REVEAL_MS = 1000;
 const uint16_t GHOST_BOSS_FALLBACK_REVEAL_INTERVAL_MS = 10000;
+const uint16_t GHOST_BOSS_FADE_OUT_MS = 1200;
+const uint8_t GHOST_BOSS_NEAR_PLAYER_VISIBLE_DISTANCE = 20;
 
 // 2-player duel mode state
 struct DuelShot {
@@ -212,6 +229,7 @@ bool coopRoundOver = false;
 bool coopRoundWon = false;
 unsigned long coopRoundOverStart = 0;
 const uint16_t COOP_ROUND_END_MS = 2300;
+bool coopLossAnimationPlayed = false;
 
 // ============================================
 // FUNCTION DECLARATIONS
@@ -228,6 +246,7 @@ void checkCollisions();
 void renderGame();
 void playWinAnimation();
 void playLoseAnimation();
+void playLifeLostAnimation();
 bool isBossDefeated();
 void initWiFi();
 void initESPNOW();
@@ -256,6 +275,12 @@ void fireCoopShotPlayer1(uint8_t color);
 void fireCoopShotPlayer2(uint8_t color);
 void updateCoopGame();
 void renderCoopGame();
+void resolveCoopShotCollisions();
+void renderSharedWinSparkle(unsigned long elapsed);
+void startModeSelectionIndicator();
+void applySettingsSelectionAndExit();
+void renderSettingsOverlay();
+void restartCurrentGameMode();
 
 // ============================================
 // SETUP
@@ -266,6 +291,7 @@ void renderCoopGame();
 // ============================================
 void setup() {
   Serial.begin(115200);
+  lastAnyShotFiredAt = millis();
   
   // Initialize FastLED first for visual feedback
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
@@ -329,6 +355,8 @@ void setup() {
   Serial.println("[INFO]   Remote: Button 1=Red, 2=Green, 3=Blue, 4=White (4-color mode)");
   Serial.println("[INFO]   Remote: Sleep=Toggle 3/4 colors, On=Reset, Higher/Lower=Brightness");
   Serial.println("[INFO]   Remote: Off=Cycle Game Mode");
+  Serial.println("[INFO]   Wired settings: hold Red+White for 1s (only if no shots for 1s)");
+  Serial.println("[INFO]   Settings keys: Green=Mode+, Blue=Mode-, White=Toggle 4th color, Red=Save/Exit");
   Serial.println("[INFO] Game Modes:");
   Serial.println("[INFO]   1. INVERTED - LEDs on when not pressed");
   Serial.println("[INFO]   2. PRESS-TO-LIGHT - LEDs light up when pressed");
@@ -361,17 +389,17 @@ void loop() {
   switch (gameState) {
     case STATE_PLAYING:
       if (buttonLEDMode == LED_MODE_DUEL) {
-        if (!modeDotsActive) {
+        if (!modeDotsActive && !settingsModeActive) {
           updateDuelGame();
         }
         renderDuelGame();
       } else if (buttonLEDMode == LED_MODE_COOP) {
-        if (!modeDotsActive) {
+        if (!modeDotsActive && !settingsModeActive) {
           updateCoopGame();
         }
         renderCoopGame();
       } else {
-        if (!modeDotsActive) {
+        if (!modeDotsActive && !settingsModeActive) {
           updateGame();
         }
         renderGame();
@@ -388,6 +416,7 @@ void loop() {
   }
 
   renderModeDotsIndicator();
+  renderSettingsOverlay();
   
   FastLED.show();
   delay(1000 / FRAMES_PER_SECOND);
@@ -423,6 +452,8 @@ void spawnBoss() {
   ghostBossModeStartTime = millis();
   ghostBossRevealUntil = 0;
   ghostBossLastRevealTrigger = ghostBossModeStartTime;
+  ghostBossFadingOut = false;
+  ghostBossFadeStart = 0;
   
   // Clear all shots from previous stage
   for (int i = 0; i < MAX_SHOTS; i++) {
@@ -495,6 +526,8 @@ void respawnBossAfterLifeLoss() {
   ghostBossModeStartTime = millis();
   ghostBossRevealUntil = 0;
   ghostBossLastRevealTrigger = ghostBossModeStartTime;
+  ghostBossFadingOut = false;
+  ghostBossFadeStart = 0;
   
   // Only 1 part with random color
   boss[0].color = random(numColors);
@@ -519,6 +552,115 @@ void respawnBossAfterLifeLoss() {
 // BUTTON HANDLING
 // ============================================
 void handleButtons() {
+  bool redPressed = (digitalRead(BTN1_PIN) == LOW);
+  bool greenPressed = (digitalRead(BTN2_PIN) == LOW);
+  bool bluePressed = (digitalRead(BTN3_PIN) == LOW);
+  bool whitePressed = (digitalRead(BTN4_PIN) == LOW);
+
+  // Option C: enter settings only when Red+White held for 1s and no shots fired for 1s.
+  if (!settingsModeActive && gameState == STATE_PLAYING) {
+    if (redPressed && whitePressed) {
+      if (settingsChordStart == 0) {
+        settingsChordStart = millis();
+      } else if ((millis() - settingsChordStart >= SETTINGS_ENTER_HOLD_MS) &&
+                 (millis() - lastAnyShotFiredAt >= SETTINGS_ENTER_HOLD_MS)) {
+        settingsModeActive = true;
+        settingsWaitRelease = true;
+        settingsSelectedMode = buttonLEDMode;
+        settingsSelectedNumColors = numColors;
+        settingsLastInteraction = millis();
+        settingsRedHoldStart = 0;
+        settingsChordStart = 0;
+        Serial.println("[SETTINGS] Entered wired settings mode");
+        Serial.printf("[SETTINGS] Mode %d, Colors %d\n", (uint8_t)settingsSelectedMode + 1, settingsSelectedNumColors);
+      }
+    } else {
+      settingsChordStart = 0;
+    }
+  }
+
+  if (settingsModeActive) {
+    bool currentState[4] = {redPressed, greenPressed, bluePressed, whitePressed};
+
+    if (settingsWaitRelease) {
+      if (!redPressed && !greenPressed && !bluePressed && !whitePressed) {
+        settingsWaitRelease = false;
+      }
+      for (int i = 0; i < 4; i++) {
+        lastButtonState[i] = currentState[i] ? LOW : HIGH;
+      }
+      return;
+    }
+
+    // Auto-exit after inactivity timeout (save current settings selection).
+    if (millis() - settingsLastInteraction >= SETTINGS_INACTIVITY_TIMEOUT_MS) {
+      Serial.println("[SETTINGS] Auto-exit after inactivity");
+      applySettingsSelectionAndExit();
+      for (int i = 0; i < 4; i++) {
+        lastButtonState[i] = currentState[i] ? LOW : HIGH;
+      }
+      return;
+    }
+
+    // Red long-press: restart current active mode without applying pending settings selection.
+    if (currentState[0]) {
+      if (settingsRedHoldStart == 0) {
+        settingsRedHoldStart = millis();
+        settingsLastInteraction = millis();
+      } else if (millis() - settingsRedHoldStart >= SETTINGS_RED_LONG_PRESS_MS) {
+        Serial.println("[SETTINGS] Red long-press -> restart current game mode");
+        settingsModeActive = false;
+        settingsWaitRelease = true;
+        settingsRedHoldStart = 0;
+        restartCurrentGameMode();
+        for (int i = 0; i < 4; i++) {
+          lastButtonState[i] = currentState[i] ? LOW : HIGH;
+        }
+        return;
+      }
+    } else {
+      // Red short press: save and exit settings.
+      if (settingsRedHoldStart != 0) {
+        unsigned long redHeld = millis() - settingsRedHoldStart;
+        settingsRedHoldStart = 0;
+        if (redHeld < SETTINGS_RED_LONG_PRESS_MS) {
+          settingsLastInteraction = millis();
+          applySettingsSelectionAndExit();
+          for (int i = 0; i < 4; i++) {
+            lastButtonState[i] = currentState[i] ? LOW : HIGH;
+          }
+          return;
+        }
+      }
+    }
+
+    // Green: mode up
+    if (lastButtonState[1] == HIGH && currentState[1]) {
+      settingsSelectedMode = (ButtonLEDMode)((settingsSelectedMode + 1) % LED_MODE_COUNT);
+      settingsLastInteraction = millis();
+      Serial.printf("[SETTINGS] Mode -> %d (%s)\n", (uint8_t)settingsSelectedMode + 1, getButtonLEDModeName(settingsSelectedMode));
+    }
+
+    // Blue: mode down
+    if (lastButtonState[2] == HIGH && currentState[2]) {
+      settingsSelectedMode = (ButtonLEDMode)((settingsSelectedMode + LED_MODE_COUNT - 1) % LED_MODE_COUNT);
+      settingsLastInteraction = millis();
+      Serial.printf("[SETTINGS] Mode -> %d (%s)\n", (uint8_t)settingsSelectedMode + 1, getButtonLEDModeName(settingsSelectedMode));
+    }
+
+    // White: toggle 3/4 colors
+    if (lastButtonState[3] == HIGH && currentState[3]) {
+      settingsSelectedNumColors = (settingsSelectedNumColors == 3) ? 4 : 3;
+      settingsLastInteraction = millis();
+      Serial.printf("[SETTINGS] Colors -> %d\n", settingsSelectedNumColors);
+    }
+
+    for (int i = 0; i < 4; i++) {
+      lastButtonState[i] = currentState[i] ? LOW : HIGH;
+    }
+    return;
+  }
+
   // Check buttons based on color mode
   int buttonsToCheck = (numColors == 4) ? 4 : 3;
   
@@ -561,6 +703,7 @@ void fireShot(uint8_t color) {
       shots[i].position = PLAYER_SIZE;  // Start just after player
       shots[i].color = color;
       shots[i].rgbColor = colorTable[color];
+      lastAnyShotFiredAt = millis();
       const char* colorName = color == 0 ? "RED" : 
                               color == 1 ? "GREEN" : 
                               color == 2 ? "BLUE" : "WHITE";
@@ -623,15 +766,8 @@ void updateGame() {
           gameState = STATE_LOSE_ANIMATION;
           animationStart = millis();
         } else {
-          // Show red flash animation for life loss
-          fill_solid(leds, NUM_LEDS, CRGB::Red);
-          FastLED.show();
-          delay(400);  // Brief red flash
-          
-          // Clear the strip
-          fill_solid(leds, NUM_LEDS, CRGB::Black);
-          FastLED.show();
-          delay(100);
+          // Play sad 3-step life-loss animation (da-da-daaaa)
+          playLifeLostAnimation();
           
           // Respawn boss as 1-part from far end
           respawnBossAfterLifeLoss();
@@ -743,11 +879,36 @@ void renderGame() {
   
   // Draw boss (hidden during Ghost Boss hidden phase)
   if (!ghostBossModeEnabled || ghostBossVisible) {
+    uint8_t fadeScale = 255;
+    bool blackoutNow = false;
+
+    if (ghostBossModeEnabled && ghostBossFadingOut) {
+      uint16_t fadeElapsed = (uint16_t)(millis() - ghostBossFadeStart);
+      if (fadeElapsed > GHOST_BOSS_FADE_OUT_MS) {
+        fadeElapsed = GHOST_BOSS_FADE_OUT_MS;
+      }
+
+      fadeScale = (uint8_t)(((uint32_t)(GHOST_BOSS_FADE_OUT_MS - fadeElapsed) * 255) / GHOST_BOSS_FADE_OUT_MS);
+
+      // Brief blackout flickers during fade-out.
+      if ((fadeElapsed > 220 && fadeElapsed < 280) ||
+          (fadeElapsed > 560 && fadeElapsed < 630) ||
+          (fadeElapsed > 900 && fadeElapsed < 980)) {
+        blackoutNow = true;
+      }
+    }
+
     for (int i = 0; i < MAX_BOSS_PARTS; i++) {
       if (boss[i].active) {
         int pos = bossPosition + i;
         if (pos >= 0 && pos < NUM_LEDS) {
-          leds[pos] = colorTable[boss[i].color];
+          if (!blackoutNow) {
+            CRGB bossColor = colorTable[boss[i].color];
+            if (ghostBossModeEnabled && ghostBossFadingOut) {
+              bossColor.nscale8_video(fadeScale);
+            }
+            leds[pos] = bossColor;
+          }
         }
       }
     }
@@ -768,25 +929,31 @@ void playWinAnimation() {
   unsigned long elapsed = millis() - animationStart;
   
   if (elapsed < WIN_ANIMATION_DURATION) {
-    // Sparkle burst - random white/gold flashes (fireworks effect)
-    FastLED.clear();
-    
-    // Create 10-15 random sparkles each frame
-    int numSparkles = random(10, 16);
-    for (int i = 0; i < numSparkles; i++) {
-      int pos = random(NUM_LEDS);
-      // Alternate between white and gold
-      if (random(2) == 0) {
-        leds[pos] = CRGB::White;
-      } else {
-        leds[pos] = CRGB(255, 215, 0);  // Gold
-      }
-    }
+    renderSharedWinSparkle(elapsed);
   } else {
     // Animation done - next level
     currentLevel++;
     gameState = STATE_PLAYING;
     spawnBoss();
+  }
+}
+
+void renderSharedWinSparkle(unsigned long elapsed) {
+  (void)elapsed;
+
+  // Sparkle burst - random white/gold flashes (fireworks effect)
+  FastLED.clear();
+
+  // Create 10-15 random sparkles each frame
+  int numSparkles = random(10, 16);
+  for (int i = 0; i < numSparkles; i++) {
+    int pos = random(NUM_LEDS);
+    // Alternate between white and gold
+    if (random(2) == 0) {
+      leds[pos] = CRGB::White;
+    } else {
+      leds[pos] = CRGB(255, 215, 0);  // Gold
+    }
   }
 }
 
@@ -809,6 +976,58 @@ void playLoseAnimation() {
     Serial.println("[INFO] Game Over - Restarting...\n");
     initGame();
   }
+}
+
+void playLifeLostAnimation() {
+  const uint8_t FAST_FADE_STEPS = 16;
+  const uint8_t SLOW_FADE_STEPS = 48;
+  const uint16_t FAST_FADE_STEP_MS = 14;
+  const uint16_t SLOW_FADE_STEP_MS = 20;
+
+  // Pulse 1: short "da"
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+  delay(70);
+  for (uint8_t step = 0; step <= FAST_FADE_STEPS; step++) {
+    uint8_t level = (uint8_t)(255 - ((uint32_t)step * 255 / FAST_FADE_STEPS));
+    CRGB c = CRGB::Red;
+    c.nscale8_video(level);
+    fill_solid(leds, NUM_LEDS, c);
+    FastLED.show();
+    delay(FAST_FADE_STEP_MS);
+  }
+  delay(60);
+
+  // Pulse 2: short "da"
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+  delay(70);
+  for (uint8_t step = 0; step <= FAST_FADE_STEPS; step++) {
+    uint8_t level = (uint8_t)(255 - ((uint32_t)step * 255 / FAST_FADE_STEPS));
+    CRGB c = CRGB::Red;
+    c.nscale8_video(level);
+    fill_solid(leds, NUM_LEDS, c);
+    FastLED.show();
+    delay(FAST_FADE_STEP_MS);
+  }
+  delay(60);
+
+  // Pulse 3: long "daaaaa"
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+  delay(180);
+  for (uint8_t step = 0; step <= SLOW_FADE_STEPS; step++) {
+    uint8_t level = (uint8_t)(255 - ((uint32_t)step * 255 / SLOW_FADE_STEPS));
+    CRGB c = CRGB::Red;
+    c.nscale8_video(level);
+    fill_solid(leds, NUM_LEDS, c);
+    FastLED.show();
+    delay(SLOW_FADE_STEP_MS);
+  }
+
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
+  delay(120);
 }
 
 // ============================================
@@ -868,6 +1087,10 @@ void processRemoteCommand() {
   
   uint8_t cmd = remoteCommand;
   remoteCommand = 0xFF;  // Clear command
+
+  if (settingsModeActive) {
+    return;
+  }
   
   // Only process commands during gameplay
   if (gameState == STATE_PLAYING) {
@@ -1024,6 +1247,42 @@ void cycleButtonLEDMode() {
   Serial.println("[INFO] Showing mode dots for 2s...");
 }
 
+void startModeSelectionIndicator() {
+  modeDotsActive = true;
+  modeDotsStartTime = millis();
+
+  // Pause mode-specific effects until indicator timeout.
+  memoryPlaybackActive = false;
+  ghostBossModeEnabled = false;
+  ghostBossVisible = true;
+}
+
+void applySettingsSelectionAndExit() {
+  settingsModeActive = false;
+  settingsWaitRelease = false;
+  settingsRedHoldStart = 0;
+
+  buttonLEDMode = settingsSelectedMode;
+  numColors = settingsSelectedNumColors;
+
+  startModeSelectionIndicator();
+
+  Serial.printf("[SETTINGS] Applied: Mode %d (%s), Colors %d\n",
+                (uint8_t)buttonLEDMode + 1,
+                getButtonLEDModeName(buttonLEDMode),
+                numColors);
+}
+
+void restartCurrentGameMode() {
+  if (buttonLEDMode == LED_MODE_DUEL) {
+    initDuelMode();
+  } else if (buttonLEDMode == LED_MODE_COOP) {
+    initCoopMode();
+  } else {
+    initGame();
+  }
+}
+
 void updateModeDotsIndicator() {
   if (!modeDotsActive) return;
 
@@ -1039,6 +1298,8 @@ void updateModeDotsIndicator() {
   ghostBossModeStartTime = millis();
   ghostBossRevealUntil = 0;
   ghostBossLastRevealTrigger = ghostBossModeStartTime;
+  ghostBossFadingOut = false;
+  ghostBossFadeStart = 0;
 
   if (buttonLEDMode == LED_MODE_MEMORY) {
     startMemoryPlaybackSequence();
@@ -1049,6 +1310,31 @@ void updateModeDotsIndicator() {
   }
 
   Serial.printf("[INFO] Mode %d active: %s\n", (uint8_t)buttonLEDMode + 1, getButtonLEDModeName(buttonLEDMode));
+}
+
+void renderSettingsOverlay() {
+  if (!settingsModeActive) return;
+
+  // Show selected mode as lilac dots at far end.
+  uint8_t modeNumber = (uint8_t)settingsSelectedMode + 1;
+  for (uint8_t dot = 0; dot < modeNumber; dot++) {
+    int dotEndPos = (NUM_LEDS - 1) - (dot * 4);
+    int dotStartPos = dotEndPos - 1;
+
+    if (dotStartPos >= 0 && dotStartPos < NUM_LEDS) {
+      leds[dotStartPos] = MODE_DOT_COLOR;
+    }
+    if (dotEndPos >= 0 && dotEndPos < NUM_LEDS) {
+      leds[dotEndPos] = MODE_DOT_COLOR;
+    }
+  }
+
+  // Show selected color mode near player 1 side.
+  if (settingsSelectedNumColors == 4) {
+    leds[0] = CRGB::White;
+  } else {
+    leds[0] = CRGB::Blue;
+  }
 }
 
 void renderModeDotsIndicator() {
@@ -1071,30 +1357,67 @@ void renderModeDotsIndicator() {
 void updateGhostBossVisibility() {
   if (!ghostBossModeEnabled || gameState != STATE_PLAYING) {
     ghostBossVisible = true;
+    ghostBossFadingOut = false;
     return;
   }
 
   unsigned long now = millis();
 
-  // First phase: always visible for 10 seconds.
+  // Grace exception: keep boss fully visible when close to player.
+  int frontPartIdx = -1;
+  for (int i = 0; i < MAX_BOSS_PARTS; i++) {
+    if (boss[i].active) {
+      frontPartIdx = i;
+      break;
+    }
+  }
+  if (frontPartIdx != -1) {
+    int frontPosition = bossPosition + frontPartIdx;
+    int impactPosition = (playerLives > 0) ? (playerLives - 1) : 0;
+    if (frontPosition - impactPosition <= GHOST_BOSS_NEAR_PLAYER_VISIBLE_DISTANCE) {
+      ghostBossVisible = true;
+      ghostBossFadingOut = false;
+      return;
+    }
+  }
+
+  // First phase: always visible for 5 seconds.
   if (now - ghostBossModeStartTime < GHOST_BOSS_INITIAL_VISIBLE_MS) {
     ghostBossVisible = true;
+    ghostBossFadingOut = false;
     return;
   }
 
-  // After initial phase: visible only during reveal windows.
+  // Reveal window keeps boss visible and cancels fade-out.
   if (now < ghostBossRevealUntil) {
     ghostBossVisible = true;
+    ghostBossFadingOut = false;
     return;
   }
 
-  ghostBossVisible = false;
+  // Transition to invisible with fade-out + blackout flickers.
+  if (ghostBossFadingOut) {
+    if (now - ghostBossFadeStart >= GHOST_BOSS_FADE_OUT_MS) {
+      ghostBossFadingOut = false;
+      ghostBossVisible = false;
+    } else {
+      ghostBossVisible = true;
+    }
+    return;
+  }
+
+  if (ghostBossVisible) {
+    ghostBossFadingOut = true;
+    ghostBossFadeStart = now;
+    return;
+  }
 
   // Fallback reveal: if no hit trigger for 10 seconds, reveal for 1 second.
   if (now - ghostBossLastRevealTrigger >= GHOST_BOSS_FALLBACK_REVEAL_INTERVAL_MS) {
     ghostBossRevealUntil = now + GHOST_BOSS_REVEAL_MS;
     ghostBossLastRevealTrigger = now;
     ghostBossVisible = true;
+    ghostBossFadingOut = false;
   }
 }
 
@@ -1106,6 +1429,8 @@ void notifyGhostBossHit() {
   unsigned long now = millis();
   ghostBossRevealUntil = now + GHOST_BOSS_REVEAL_MS;
   ghostBossLastRevealTrigger = now;
+  ghostBossFadingOut = false;
+  ghostBossVisible = true;
 }
 
 void initDuelMode() {
@@ -1132,6 +1457,7 @@ void fireDuelShotPlayer1(uint8_t color) {
     if (player1Shots[i].position == -1) {
       player1Shots[i].position = PLAYER_SIZE;
       player1Shots[i].color = color;
+      lastAnyShotFiredAt = millis();
       Serial.printf("[DUEL] P1 fired %d from pos %d\n", color, player1Shots[i].position);
       return;
     }
@@ -1145,6 +1471,7 @@ void fireDuelShotPlayer2(uint8_t color) {
     if (player2Shots[i].position == -1) {
       player2Shots[i].position = NUM_LEDS - PLAYER_SIZE - 1;
       player2Shots[i].color = color;
+      lastAnyShotFiredAt = millis();
       Serial.printf("[DUEL] P2 fired %d from pos %d\n", color, player2Shots[i].position);
       return;
     }
@@ -1266,82 +1593,62 @@ void renderDuelEndAnimation() {
   CRGB accentColor = CRGB::White;
   CRGB loserColor = CRGB::DarkRed;
 
-  // Dark base so winner direction elements are clear.
   fill_solid(leds, NUM_LEDS, CRGB::Black);
 
-  // Keep winner end strongly lit at all times.
-  if (duelWinner == 1) {
-    for (int i = 0; i < PLAYER_SIZE + 1; i++) {
-      if (i < NUM_LEDS) leds[i] = winnerColor;
-    }
-  } else if (duelWinner == 2) {
-    for (int i = NUM_LEDS - (PLAYER_SIZE + 1); i < NUM_LEDS; i++) {
-      if (i >= 0) leds[i] = winnerColor;
-    }
+  int winnerStart = 0;
+  int winnerEnd = NUM_LEDS / 3;
+  int loserStart = (NUM_LEDS * 2) / 3;
+  int loserEnd = NUM_LEDS - 1;
+
+  if (duelWinner == 2) {
+    winnerStart = (NUM_LEDS * 2) / 3;
+    winnerEnd = NUM_LEDS - 1;
+    loserStart = 0;
+    loserEnd = NUM_LEDS / 3;
   }
 
-  // Keep loser end dim red to show target side.
-  if (duelWinner == 1) {
-    for (int i = NUM_LEDS - PLAYER_SIZE; i < NUM_LEDS; i++) {
-      if (i >= 0) leds[i] = loserColor;
-    }
-  } else if (duelWinner == 2) {
-    for (int i = 0; i < PLAYER_SIZE; i++) {
-      if (i < NUM_LEDS) leds[i] = loserColor;
-    }
+  // WINNER ZONE: bright and energetic (rapid strobe + sparkles).
+  bool winnerFlash = ((elapsed / 70) % 2) == 0;
+  for (int i = winnerStart; i <= winnerEnd; i++) {
+    if (i < 0 || i >= NUM_LEDS) continue;
+    leds[i] = winnerFlash ? winnerColor : accentColor;
   }
 
-  // Additional bright strobe at winner end.
-  bool flashOn = ((elapsed / 60) % 2) == 0;
-  if (flashOn) {
-    if (duelWinner == 1 && NUM_LEDS > 0) {
-      leds[0] = accentColor;
-    } else if (duelWinner == 2 && NUM_LEDS > 0) {
-      leds[NUM_LEDS - 1] = accentColor;
-    }
-  }
-
-  // Main directional shot trail from winner -> loser.
-  uint16_t phaseMain = elapsed % DUEL_RUN_PERIOD_MS;
-  int runPosMain = (int)((uint32_t)phaseMain * NUM_LEDS / DUEL_RUN_PERIOD_MS);
-  int headMain = (duelWinner == 1) ? runPosMain : (NUM_LEDS - 1 - runPosMain);
-
-  for (int tail = 0; tail < 6; tail++) {
-    int pos = (duelWinner == 1) ? (headMain - tail) : (headMain + tail);
-    if (pos >= 0 && pos < NUM_LEDS) {
-      leds[pos] = (tail == 0) ? accentColor : winnerColor;
-    }
-  }
-
-  // Secondary pulse, phase-shifted, same direction for readability.
-  uint16_t phaseSecondary = (elapsed + (DUEL_RUN_PERIOD_MS / 2)) % DUEL_RUN_PERIOD_MS;
-  int runPosSecondary = (int)((uint32_t)phaseSecondary * NUM_LEDS / DUEL_RUN_PERIOD_MS);
-  int headSecondary = (duelWinner == 1) ? runPosSecondary : (NUM_LEDS - 1 - runPosSecondary);
-  for (int tail = 0; tail < 4; tail++) {
-    int pos = (duelWinner == 1) ? (headSecondary - tail) : (headSecondary + tail);
-    if (pos >= 0 && pos < NUM_LEDS) {
-      leds[pos] = winnerColor;
-    }
-  }
-
-  // Denser random sparks near winner side.
-  for (int s = 0; s < 8; s++) {
-    if (random8() < 220) {
-      int zone = NUM_LEDS / 4;
-      if (zone < 1) zone = 1;
-      int sparkPos = (duelWinner == 1) ? random(zone) : (NUM_LEDS - 1 - random(zone));
-      if (sparkPos >= 0 && sparkPos < NUM_LEDS) {
-        leds[sparkPos] = (random8() < 120) ? accentColor : winnerColor;
+  for (int s = 0; s < 14; s++) {
+    if (random8() < 210) {
+      int span = winnerEnd - winnerStart + 1;
+      if (span < 1) span = 1;
+      int pos = winnerStart + random(span);
+      if (pos >= 0 && pos < NUM_LEDS) {
+        leds[pos] = (random8() < 140) ? accentColor : winnerColor;
       }
     }
   }
 
-  // Impact burst around main shot head.
-  if ((elapsed % 120) < 45) {
-    for (int r = -2; r <= 2; r++) {
-      int pos = headMain + r;
-      if (pos >= 0 && pos < NUM_LEDS) {
-        leds[pos] = (r == 0) ? CRGB::White : winnerColor;
+  // LOSER ZONE: dim, slow, and striped (visually opposite of winner zone).
+  uint8_t loserPulse = (uint8_t)(20 + ((elapsed / 8) % 50));
+  for (int i = loserStart; i <= loserEnd; i++) {
+    if (i < 0 || i >= NUM_LEDS) continue;
+    if (((i + (elapsed / 180)) % 2) == 0) {
+      CRGB c = loserColor;
+      c.nscale8_video(loserPulse);
+      leds[i] = c;
+    }
+  }
+
+  // CENTER: directional victory sweep from winner side to loser side.
+  int centerStart = winnerEnd + 1;
+  int centerEnd = loserStart - 1;
+  if (centerEnd >= centerStart) {
+    int centerLen = centerEnd - centerStart + 1;
+    uint16_t phase = elapsed % DUEL_RUN_PERIOD_MS;
+    int offset = (int)((uint32_t)phase * centerLen / DUEL_RUN_PERIOD_MS);
+    int head = (duelWinner == 1) ? (centerStart + offset) : (centerEnd - offset);
+
+    for (int t = 0; t < 6; t++) {
+      int pos = (duelWinner == 1) ? (head - t) : (head + t);
+      if (pos >= centerStart && pos <= centerEnd && pos >= 0 && pos < NUM_LEDS) {
+        leds[pos] = (t == 0) ? accentColor : winnerColor;
       }
     }
   }
@@ -1353,6 +1660,7 @@ void initCoopMode() {
   coopRoundOver = false;
   coopRoundWon = false;
   coopRoundOverStart = 0;
+  coopLossAnimationPlayed = false;
 
   for (int i = 0; i < MAX_SHOTS; i++) {
     coopPlayer1Shots[i].position = -1;
@@ -1366,6 +1674,8 @@ void initCoopMode() {
 }
 
 void spawnCoopBossRound() {
+  coopLossAnimationPlayed = false;
+
   coopBossPartsThisRound = coopRound * 2;
   if (coopBossPartsThisRound > MAX_COOP_BOSS_PARTS) {
     coopBossPartsThisRound = MAX_COOP_BOSS_PARTS;
@@ -1462,6 +1772,7 @@ void fireCoopShotPlayer1(uint8_t color) {
     if (coopPlayer1Shots[i].position == -1) {
       coopPlayer1Shots[i].position = PLAYER_SIZE;
       coopPlayer1Shots[i].color = color;
+      lastAnyShotFiredAt = millis();
       return;
     }
   }
@@ -1474,6 +1785,7 @@ void fireCoopShotPlayer2(uint8_t color) {
     if (coopPlayer2Shots[i].position == -1) {
       coopPlayer2Shots[i].position = NUM_LEDS - PLAYER_SIZE - 1;
       coopPlayer2Shots[i].color = color;
+      lastAnyShotFiredAt = millis();
       return;
     }
   }
@@ -1496,12 +1808,19 @@ void updateCoopGame() {
 
   unsigned long now = millis();
 
+  // Resolve collisions at current positions first so shots cannot pass through
+  // boss parts when boss and shots move during the same frame.
+  resolveCoopShotCollisions();
+
   if (now - coopLastBossMove >= coopBossSpeed) {
     // Expand boss area outward from center.
     coopBossLeftEdge--;
     coopBossRightEdge++;
     distributeCoopBossPositions();
     coopLastBossMove = now;
+
+    // Boss moved: resolve immediate overlaps before shots move again.
+    resolveCoopShotCollisions();
   }
 
   if (now - lastShotMove >= SHOT_SPEED) {
@@ -1523,7 +1842,39 @@ void updateCoopGame() {
     lastShotMove = now;
   }
 
-  // Collisions: shots hit the currently visible boss LED at that position (outer-most wins).
+  // Resolve collisions again after movement.
+  resolveCoopShotCollisions();
+
+  // Lose if any active boss part reaches either player's home zone.
+  for (int b = 0; b < coopBossPartsThisRound; b++) {
+    if (!coopBoss[b].active) continue;
+    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (NUM_LEDS - PLAYER_SIZE)) {
+      coopRoundOver = true;
+      coopRoundWon = false;
+      coopRoundOverStart = now;
+      coopLossAnimationPlayed = false;
+      return;
+    }
+  }
+
+  // Win if all boss parts are inactive.
+  bool anyActive = false;
+  for (int b = 0; b < coopBossPartsThisRound; b++) {
+    if (coopBoss[b].active) {
+      anyActive = true;
+      break;
+    }
+  }
+
+  if (!anyActive) {
+    coopRoundOver = true;
+    coopRoundWon = true;
+    coopRoundOverStart = now;
+  }
+}
+
+void resolveCoopShotCollisions() {
+  // Shots hit the currently visible boss LED at that position (outer-most wins).
   for (int s = 0; s < MAX_SHOTS; s++) {
     if (coopPlayer1Shots[s].position != -1) {
       int16_t hitIndex = findVisibleCoopBossIndexAtPosition(coopPlayer1Shots[s].position);
@@ -1554,32 +1905,6 @@ void updateCoopGame() {
         coopPlayer2Shots[s].position = -1;
       }
     }
-  }
-
-  // Lose if any active boss part reaches either player's home zone.
-  for (int b = 0; b < coopBossPartsThisRound; b++) {
-    if (!coopBoss[b].active) continue;
-    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (NUM_LEDS - PLAYER_SIZE)) {
-      coopRoundOver = true;
-      coopRoundWon = false;
-      coopRoundOverStart = now;
-      return;
-    }
-  }
-
-  // Win if all boss parts are inactive.
-  bool anyActive = false;
-  for (int b = 0; b < coopBossPartsThisRound; b++) {
-    if (coopBoss[b].active) {
-      anyActive = true;
-      break;
-    }
-  }
-
-  if (!anyActive) {
-    coopRoundOver = true;
-    coopRoundWon = true;
-    coopRoundOverStart = now;
   }
 }
 
@@ -1631,12 +1956,12 @@ void renderCoopGame() {
 
   if (coopRoundOver) {
     if (coopRoundWon) {
-      if ((millis() / 120) % 2 == 0) {
-        fill_solid(leds, NUM_LEDS, CRGB::Green);
-      }
+      unsigned long elapsed = millis() - coopRoundOverStart;
+      renderSharedWinSparkle(elapsed);
     } else {
-      if ((millis() / 120) % 2 == 0) {
-        fill_solid(leds, NUM_LEDS, CRGB::Red);
+      if (!coopLossAnimationPlayed) {
+        playLifeLostAnimation();
+        coopLossAnimationPlayed = true;
       }
     }
   }
