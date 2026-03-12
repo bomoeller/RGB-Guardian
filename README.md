@@ -9,14 +9,14 @@ PlatformIO project for controlling WS2812B/WS2815 LED strip game with ESP32-C3 S
 ### Setup 1: WS2812B (Default)
 - **Board**: ESP32-C3 SuperMini
 - **LED Strip**: WS2812B (30 LEDs)
-- **Data Pin**: GPIO8
+- **Data Pin**: GPIO10
 - **Color Order**: GRB
 - **Power**: 5V (ensure adequate power supply for LED strip)
 
 ### Setup 2: WS2815
 - **Board**: ESP32-C3 SuperMini
 - **LED Strip**: WS2815 (288 LEDs)
-- **Data Pin**: GPIO8
+- **Data Pin**: GPIO10
 - **Color Order**: RGB
 - **Power**: 5V (requires external power supply rated for 288 LEDs)
 
@@ -31,9 +31,21 @@ PlatformIO project for controlling WS2812B/WS2815 LED strip game with ESP32-C3 S
 
 ```
 ESP32-C3 SuperMini -> LED Strip (WS2812B or WS2815)
-GPIO8              -> DIN (Data In)
+GPIO10             -> DIN (Data In)
 GND                -> GND
 5V                 -> 5V (use external power for WS2815 or >10 LEDs on WS2812B)
+
+Game Buttons (connect buttons between GPIO and GND, internal pull-ups enabled):
+GPIO0              -> Red Button (INPUT)
+GPIO1              -> Green Button (INPUT)
+GPIO2              -> Blue Button (INPUT)
+GPIO3              -> White Button (INPUT, 4-color mode)
+
+Button LEDs (optional - for illuminated game buttons):
+GPIO5              -> Red Button LED (OUTPUT)
+GPIO6              -> Green Button LED (OUTPUT)
+GPIO7              -> Blue Button LED (OUTPUT)
+GPIO8              -> White Button LED (OUTPUT)
 ```
 
 ## Features
@@ -44,9 +56,10 @@ GND                -> GND
 
 ## Getting Started
 
-1. Connect the LED strip to GPIO8
-2. Build and upload: `pio run --target upload`
-3. Monitor serial output: `pio device monitor`
+1. Connect the LED strip to GPIO10
+2. (Optional) Connect button LEDs to GPIO 5-8
+3. Build and upload: `pio run --target upload`
+4. Monitor serial output: `pio device monitor`
 
 ## Power Considerations
 

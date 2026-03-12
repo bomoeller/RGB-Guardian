@@ -51,9 +51,10 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
                       +---- [Common GND] ----+---- [LED Strip GND]
                                              |
 [ESP32-C3 USB] -------------------------------+---- [ESP32 GND]
-[ESP32 GPIO8] ------------------------------------ [LED Strip Data]
+[ESP32 GPIO10] ----------------------------------- [LED Strip Data]
 
-[Buttons] ---- [ESP32 GPIO 0-4] (with internal pull-up, connect button to GND)
+[Game Buttons] ---- [ESP32 GPIO 0-3] (Red=0, Green=1, Blue=2, White=3, internal pull-up, connect to GND)
+[Button LEDs] ----- [ESP32 GPIO 5-8] (Red=5, Green=6, Blue=7, White=8, OUTPUT)
 ```
 
 **[WARNING]** Do not power 288 LEDs from USB! Use proper external power supply with adequate wire gauge (14-16 AWG for 288 LEDs).

@@ -390,13 +390,17 @@ RGB Guardian - LED Game System
 ### Pin Configuration
 GPIO usage (same for both LED strip configurations):
 ```
-GPIO0  - Button 1 (input, pull-up)
-GPIO1  - Button 2 (input, pull-up)
-GPIO2  - Button 3 (input, pull-up) [Strapping pin - avoid holding during boot]
-GPIO3  - Button 4 (input, pull-up)
-GPIO4  - Button 5 (input, pull-up)
-GPIO8  - WS2812B/WS2815 LED Strip Data (output)
+GPIO0  - Button 1 / Red Shot (input, pull-up)
+GPIO1  - Button 2 / Green Shot (input, pull-up)
+GPIO2  - Button 3 / Blue Shot (input, pull-up) [Strapping pin - avoid holding during boot]
+GPIO3  - Button 4 / White Shot - 4-color mode (input, pull-up)
+GPIO4  - Button 5 (input, pull-up, unused)
+GPIO5  - Red Button LED (output)
+GPIO6  - Green Button LED (output)
+GPIO7  - Blue Button LED (output)
+GPIO8  - White Button LED (output)
 GPIO9  - BOOT Button (input, pull-up, built-in)
+GPIO10 - WS2812B/WS2815 LED Strip Data (output)
 ```
 
 ### Power Requirements
