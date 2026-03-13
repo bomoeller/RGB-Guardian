@@ -394,7 +394,6 @@ GPIO0  - Button 1 / Red Shot (input, pull-up)
 GPIO1  - Button 2 / Green Shot (input, pull-up)
 GPIO2  - Button 3 / Blue Shot (input, pull-up) [Strapping pin - avoid holding during boot]
 GPIO3  - Button 4 / White Shot - 4-color mode (input, pull-up)
-GPIO4  - Button 5 (input, pull-up, unused)
 GPIO5  - Red Button LED (output)
 GPIO6  - Green Button LED (output)
 GPIO7  - Blue Button LED (output)
@@ -410,7 +409,7 @@ GPIO10 - WS2812B/WS2815 LED Strip Data (output)
 - Current consumption: 
   - ESP32-C3: ~60mA
   - WS2812B (30 LEDs): ~1.8A max at full brightness
-    - WS2815 (288 LEDs): current depends on strip spec and brightness
+        - WS2815 (up to 300 LEDs, default active 288): current depends on strip spec and brightness
 - Battery life target: N/A (USB/external powered)
 - [WARNING] WS2812B: Use external 5V/2A power supply - do not power 30 LEDs from USB!
 - [WARNING] WS2815: MUST use external 12V power supply - use proper wire gauge!
@@ -430,7 +429,7 @@ List with versions:
 - ESP32-C3 uses native USB (not UART bridge) - requires special CDC flags
 - Two LED strip configurations available (switch in main.cpp):
     - WS2812B: 30 LEDs, GRB color order, GPIO10
-    - WS2815: 288 LEDs, RGB color order, GPIO10
+    - WS2815: 300 max LEDs (default active 288), RGB color order, GPIO10
 - WS2812B requires precise timing - use GPIO10 (good signal integrity)
 - All buttons use internal pull-ups - wire to GND when pressed
 

@@ -16,11 +16,11 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 ### Required Components
 
 1. **ESP32-C3 SuperMini** (microcontroller)
-2. **WS2815 LED Strip** - 288 LEDs (or WS2812B with 30 LEDs)
+2. **WS2815 LED Strip** - up to 300 LEDs (default active length 288) (or WS2812B with 30 LEDs)
 3. **5 Push Buttons** (for color shooting)
 4. **WIZ-Remote** (optional - for wireless control)
 5. **Power Supply:**
-   - WS2815 (288 LEDs): 12V external PSU (size current by strip spec)
+   - WS2815 (up to 300 LEDs): 12V external PSU (size current by strip spec)
    - WS2812B (30 LEDs): 5V/2A minimum
 6. **Jumper wires**
 
@@ -36,7 +36,6 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 - Button 2 (GREEN) → ESP32-C3 GPIO 1 → GND when pressed
 - Button 3 (BLUE) → ESP32-C3 GPIO 2 → GND when pressed
 - Button 4 (WHITE) → ESP32-C3 GPIO 3 → GND when pressed
-- Button 5 (unused) → ESP32-C3 GPIO 4 → GND when pressed
 
 **Power:**
 - ESP32-C3 powered via USB (5V)
@@ -57,7 +56,7 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 [Button LEDs] ----- [ESP32 GPIO 5-8] (Red=5, Green=6, Blue=7, White=8, OUTPUT)
 ```
 
-**[WARNING]** Do not power 288 LEDs from USB! Use proper external power supply with adequate wire gauge (14-16 AWG for 288 LEDs).
+**[WARNING]** Do not power high LED counts from USB! Use proper external power supply with adequate wire gauge (14-16 AWG for long strips).
 
 ---
 
@@ -99,7 +98,7 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 ### Difficulty Progression
 
 **Speed Changes:**
-- WS2815 (288 LEDs): Level 1 = 300ms/step → Level 6+ = 50ms/step
+- WS2815 (active length default 288, configurable up to 300): Level 1 = 300ms/step → Level 6+ = 50ms/step
 - WS2812B (30 LEDs): Level 1 = 1500ms/step → Level 6+ = 250ms/step
 
 **Boss Growth:**
@@ -147,9 +146,32 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 | Sleep | Toggle between 3-color and 4-color mode |
 | Higher | Increase LED brightness (+10%) |
 | Lower | Decrease LED brightness (-10%) |
-| Off | Cycle Game Mode (1-7) |
+| Off | Cycle Game Mode (1-8) |
 
 **Note:** Physical buttons and remote work simultaneously - use whichever is more comfortable!
+
+### Wired Settings Mode (Physical Buttons)
+
+You can configure gameplay without the remote:
+
+**Enter settings:**
+- Hold **RED + WHITE** for 1 second
+- Requirement: no shots fired in the last 1 second
+
+**Inside settings:**
+- **GREEN**: Mode up
+- **BLUE**: Mode down
+- **WHITE (short press)**: Toggle 3-color / 4-color
+- **RED (short press)**: Save and exit
+- **RED (long press >3s)**: Restart current mode immediately
+- **Auto-exit**: 10 seconds inactivity (applies current selection)
+
+**LED length adjust sub-mode:**
+- **WHITE (long press)**: Enter LED length adjust
+- **GREEN/BLUE short press**: +/- 1 LED
+- **GREEN/BLUE long press**: faster repeated change in larger steps
+- **WHITE press**: Exit LED length adjust sub-mode
+- **RED save**: Applies length and restarts game when length changed
 
 ---
 
@@ -164,6 +186,13 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 5. **GHOST BOSS** - Boss visibility challenge
 6. **DUEL** - 2-player versus from both ends
 7. **CO-PLAY** - 2-player cooperative expanding boss
+8. **ALL-VS-ALL** - 2 players versus each other and the boss
+
+**Mode 8 (ALL-VS-ALL) rules:**
+- Boss expands from center like CO-PLAY
+- If boss reaches either side, both players lose immediately
+- Same-color shots cancel each other; different-color shots pass through
+- A shot that reaches the opposite player side can eliminate that player and end the round
 
 ### 3-color / 4-color toggle
 
@@ -257,14 +286,19 @@ Edit `src/main.cpp` lines 8-9 to select your LED strip:
 ```cpp
 // Uncomment ONE of these:
 // #define LED_SETUP_WS2812B_30      // 30 LEDs, WS2812B strip
-#define LED_SETUP_WS2815_288   // 288 LEDs, WS2815 strip
+#define LED_SETUP_WS2815_288   // WS2815 profile (300 max initialized, 288 default active)
 ```
+
+**Important:**
+- `NUM_LEDS` (hardware max initialized) is **300** for WS2815 profile
+- Default gameplay length starts at **288** (`activeLedCount`)
+- You can change active length in wired settings mode (LED length adjust)
 
 ### Game Speed Tuning
 
 Adjust difficulty in `src/main.cpp`:
 
-**WS2815 (288 LEDs):**
+**WS2815 (up to 300 LEDs, default active 288):**
 ```cpp
 #define BOSS_INITIAL_SPEED 300   // Level 1 speed (ms per step)
 #define BOSS_SPEED_DECREASE 30   // Speed gain per level

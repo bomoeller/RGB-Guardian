@@ -1,11 +1,11 @@
 # RGB Guardian - ESP32-C3 SuperMini
 
-PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 7 game modes.
+PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 8 game modes.
 
 ## Current Setup
 
 - Board: ESP32-C3 SuperMini
-- Active strip: WS2815 (288 LEDs)
+- Active strip profile: WS2815 (300 max LEDs initialized, default active length 288)
 - LED data pin: GPIO10
 - LED strip power: external 12V power supply
 - ESP32 power: USB (5V)
@@ -20,7 +20,6 @@ Inputs (active-low with internal pull-ups):
 - GPIO1: Green button
 - GPIO2: Blue button
 - GPIO3: White button (4-color modes)
-- GPIO4: Button 5 (currently not used by gameplay)
 - GPIO9: BOOT button
 
 Outputs:
@@ -53,9 +52,30 @@ Important: ESP32 GND and strip power GND must be connected together.
 5. GHOST BOSS
 6. DUEL
 7. CO-PLAY
+8. ALL-VS-ALL
 
 Mode indicator:
 - Far-end lilac dots show mode number for 2 seconds before mode starts.
+
+## Wired Settings Mode (Physical Buttons)
+
+Enter settings:
+- Hold RED + WHITE for 1 second
+- Requirement: no shots fired in the last 1 second
+
+In settings:
+- GREEN: mode up
+- BLUE: mode down
+- WHITE (short): toggle 3-color / 4-color
+- RED (short): save and exit
+- RED (long >3s): restart current mode
+- Auto-exit after 10 seconds inactivity (applies selection)
+
+LED length adjust sub-mode:
+- WHITE (long): enter/exit LED length adjust
+- GREEN/BLUE short: +/- 1 LED
+- GREEN/BLUE long: accelerated repeated change
+- RED save applies changes and restarts game if length changed
 
 ## Build and Upload
 
@@ -71,8 +91,13 @@ Edit `src/main.cpp` and select one:
 
 ```cpp
 // #define LED_SETUP_WS2812B_30
-#define LED_SETUP_WS2815_288
+#define LED_SETUP_WS2815_288   // WS2815 profile: 300 max LEDs, default active length 288
 ```
+
+Notes:
+- WS2815 profile initializes up to 300 LEDs (`NUM_LEDS`)
+- Default gameplay uses 288 active LEDs (`DEFAULT_ACTIVE_LED_COUNT`)
+- Active LED length is adjustable in wired settings mode
 
 ## Power Notes
 

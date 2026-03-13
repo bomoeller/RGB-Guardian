@@ -10,7 +10,7 @@
 
 // Uncomment ONE of these to select your LED strip configuration:
 // #define LED_SETUP_WS2812B_30      // 30 LEDs, WS2812B strip
-#define LED_SETUP_WS2815_288   // 288 LEDs, WS2815 strip
+#define LED_SETUP_WS2815_288   // WS2815 profile: 300 max LEDs, default active length 288
 
 // Configuration for WS2812B with 30 LEDs
 #ifdef LED_SETUP_WS2812B_30
@@ -27,7 +27,7 @@
   #define SHOT_SPEED 50            // milliseconds between shot movements
 #endif
 
-// Configuration for WS2815 with 288 LEDs
+// Configuration for WS2815 with 300 max LEDs (default active length 288)
 #ifdef LED_SETUP_WS2815_288
   #define LED_PIN     10
   #define NUM_LEDS    300
@@ -35,7 +35,7 @@
   #define LED_TYPE    WS2815
   #define COLOR_ORDER RGB        // R and G swapped compared to WS2812B
   #define BOSS_START_POS 299     // Last LED position
-  // Speed settings optimized for 288 LEDs (5x faster than 30 LED setup)
+  // Speed settings optimized for long WS2815 strips (default active length 288)
   #define BOSS_INITIAL_SPEED 300   // milliseconds per step (Level 1)
   #define BOSS_SPEED_DECREASE 30   // Speed increase per level (ms faster)
   #define BOSS_MIN_SPEED 50        // Fastest possible boss speed
@@ -51,9 +51,8 @@
 #define BTN2_PIN    1        // Green shot button
 #define BTN3_PIN    2        // Blue shot button
 #define BTN4_PIN    3        // White shot button (4-color mode)
-#define BTN5_PIN    4        // Unused
 #define BTN6_PIN    9        // BOOT button (unused in game)
-#define NUM_BUTTONS 6
+#define NUM_BUTTONS 5
 
 // Button LED pins (for illuminated game buttons)
 #define BTN_LED_RED_PIN    5  // Red button LED
@@ -106,8 +105,8 @@ struct BossPart {
 // GLOBAL VARIABLES
 // ============================================
 CRGB leds[NUM_LEDS];
-const uint8_t buttonPins[NUM_BUTTONS] = {BTN1_PIN, BTN2_PIN, BTN3_PIN, BTN4_PIN, BTN5_PIN, BTN6_PIN};
-bool lastButtonState[NUM_BUTTONS] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+const uint8_t buttonPins[NUM_BUTTONS] = {BTN1_PIN, BTN2_PIN, BTN3_PIN, BTN4_PIN, BTN6_PIN};
+bool lastButtonState[NUM_BUTTONS] = {HIGH, HIGH, HIGH, HIGH, HIGH};
 
 GameState gameState = STATE_PLAYING;
 uint8_t currentLevel = 1;
@@ -136,7 +135,7 @@ enum ButtonLEDMode {
   LED_MODE_GHOST_BOSS,      // Ghost boss gameplay mode
   LED_MODE_DUEL,            // 2-player duel mode
   LED_MODE_COOP,            // 2-player cooperative boss mode
-  LED_MODE_ALL_VS_ALL,      // 2-player vs boss mode
+  LED_MODE_ALL_VS_ALL,      // 2-player all-vs-all (players vs each other and boss)
   LED_MODE_COUNT            // Total number of modes
 };
 
@@ -1515,16 +1514,18 @@ void updateModeDotsIndicator() {
 void renderSettingsOverlay() {
   if (!settingsModeActive) return;
 
+  uint16_t previewLedCount = settingsSelectedLedCount;
+
   if (settingsLengthAdjustActive) {
     // LED length preview: active region dim blue, endpoint white, inactive region black.
     for (int i = 0; i < NUM_LEDS; i++) {
-      if (i < settingsSelectedLedCount) {
+      if (i < previewLedCount) {
         leds[i] = CRGB(0, 0, 20);
       } else {
         leds[i] = CRGB::Black;
       }
     }
-    int endPos = settingsSelectedLedCount - 1;
+    int endPos = previewLedCount - 1;
     if (endPos >= 0 && endPos < NUM_LEDS) {
       leds[endPos] = CRGB::White;
     }
@@ -1534,13 +1535,13 @@ void renderSettingsOverlay() {
   // Show selected mode as lilac dots at far end.
   uint8_t modeNumber = (uint8_t)settingsSelectedMode + 1;
   for (uint8_t dot = 0; dot < modeNumber; dot++) {
-    int dotEndPos = ((int)activeLedCount - 1) - (dot * 4);
+    int dotEndPos = ((int)previewLedCount - 1) - (dot * 4);
     int dotStartPos = dotEndPos - 1;
 
-    if (dotStartPos >= 0 && dotStartPos < activeLedCount) {
+    if (dotStartPos >= 0 && dotStartPos < previewLedCount) {
       leds[dotStartPos] = MODE_DOT_COLOR;
     }
-    if (dotEndPos >= 0 && dotEndPos < activeLedCount) {
+    if (dotEndPos >= 0 && dotEndPos < previewLedCount) {
       leds[dotEndPos] = MODE_DOT_COLOR;
     }
   }
@@ -2814,17 +2815,25 @@ void updateButtonLEDs() {
 
 void adjustSettingsLedCount(int16_t delta) {
   int32_t next = (int32_t)settingsSelectedLedCount + delta;
+  bool clampedMin = false;
+  bool clampedMax = false;
   if (next < SETTINGS_LED_COUNT_MIN) {
     next = SETTINGS_LED_COUNT_MIN;
+    clampedMin = true;
   }
   if (next > NUM_LEDS) {
     next = NUM_LEDS;
+    clampedMax = true;
   }
 
   if ((uint16_t)next != settingsSelectedLedCount) {
     settingsSelectedLedCount = (uint16_t)next;
     settingsLastInteraction = millis();
     Serial.printf("[SETTINGS] LED count -> %d\n", settingsSelectedLedCount);
+  } else if (clampedMax) {
+    Serial.printf("[SETTINGS] LED count at MAX (%d)\n", NUM_LEDS);
+  } else if (clampedMin) {
+    Serial.printf("[SETTINGS] LED count at MIN (%d)\n", SETTINGS_LED_COUNT_MIN);
   }
 }
 
