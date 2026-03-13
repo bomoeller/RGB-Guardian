@@ -134,6 +134,7 @@ enum ButtonLEDMode {
   LED_MODE_GHOST_BOSS,      // Ghost boss gameplay mode
   LED_MODE_DUEL,            // 2-player duel mode
   LED_MODE_COOP,            // 2-player cooperative boss mode
+  LED_MODE_ALL_VS_ALL,      // 2-player vs boss mode
   LED_MODE_COUNT            // Total number of modes
 };
 
@@ -151,6 +152,18 @@ uint8_t settingsSelectedNumColors = 3;
 unsigned long settingsLastInteraction = 0;
 unsigned long settingsRedHoldStart = 0;
 unsigned long lastAnyShotFiredAt = 0;
+
+// Idle pause screen
+bool idlePauseActive = false;
+bool idlePauseTargetActive = false;
+unsigned long lastUserActivityAt = 0;
+const uint32_t IDLE_PAUSE_TIMEOUT_MS = 20000;
+const uint16_t IDLE_PAUSE_FADE_IN_MS = 1400;
+const uint16_t IDLE_PAUSE_FADE_OUT_MS = 500;
+uint8_t idlePauseBlend = 0;
+unsigned long idlePauseLastBlendUpdate = 0;
+CRGB idlePauseSnapshot[NUM_LEDS];
+CRGB idlePauseFrame[NUM_LEDS];
 
 // Mode change indicator on strip end
 bool modeDotsActive = false;
@@ -231,6 +244,16 @@ unsigned long coopRoundOverStart = 0;
 const uint16_t COOP_ROUND_END_MS = 2300;
 bool coopLossAnimationPlayed = false;
 
+// 2-player all-vs-all mode state (players vs expanding boss)
+DuelShot allVsAllPlayer1Shots[MAX_SHOTS];
+DuelShot allVsAllPlayer2Shots[MAX_SHOTS];
+int16_t allVsAllPrevP1Shots[MAX_SHOTS];
+int16_t allVsAllPrevP2Shots[MAX_SHOTS];
+bool allVsAllRoundOver = false;
+bool allVsAllPlayersWin = false;
+unsigned long allVsAllRoundOverStart = 0;
+bool allVsAllLossAnimationPlayed = false;
+
 // ============================================
 // FUNCTION DECLARATIONS
 // ============================================
@@ -276,11 +299,22 @@ void fireCoopShotPlayer2(uint8_t color);
 void updateCoopGame();
 void renderCoopGame();
 void resolveCoopShotCollisions();
+void initAllVsAllMode();
+void spawnAllVsAllRound();
+void updateAllVsAllGame();
+void renderAllVsAllGame();
+void resolveAllVsAllShotVsBossCollisions();
+void resolveAllVsAllShotVsShotCollisions();
+void fireAllVsAllShotPlayer1(uint8_t color);
+void fireAllVsAllShotPlayer2(uint8_t color);
 void renderSharedWinSparkle(unsigned long elapsed);
 void startModeSelectionIndicator();
 void applySettingsSelectionAndExit();
 void renderSettingsOverlay();
 void restartCurrentGameMode();
+void updateIdlePauseState();
+void updateIdlePauseBlend();
+void renderIdlePauseScreen(CRGB* out);
 
 // ============================================
 // SETUP
@@ -292,6 +326,8 @@ void restartCurrentGameMode();
 void setup() {
   Serial.begin(115200);
   lastAnyShotFiredAt = millis();
+  lastUserActivityAt = millis();
+  idlePauseLastBlendUpdate = millis();
   
   // Initialize FastLED first for visual feedback
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
@@ -365,6 +401,7 @@ void setup() {
   Serial.println("[INFO]   5. GHOST BOSS - Boss flickers visible/invisible");
   Serial.println("[INFO]   6. DUEL - 2-player shots from both ends");
   Serial.println("[INFO]   7. CO-PLAY - 2-player cooperative expanding boss");
+  Serial.println("[INFO]   8. ALL-VS-ALL - 2 players vs expanding boss");
   Serial.printf("[INFO] Current LED Mode: INVERTED (Mode 1)\n");
   Serial.println("=================================\n");
   
@@ -383,16 +420,31 @@ void loop() {
   handleButtons();
   processRemoteCommand();  // Handle remote control inputs
   updateModeDotsIndicator();
-  updateGhostBossVisibility();
+  updateIdlePauseState();
+  updateIdlePauseBlend();
+  if (!idlePauseActive) {
+    updateGhostBossVisibility();
+  }
   updateButtonLEDs();      // Update button LED states based on mode
   
   switch (gameState) {
     case STATE_PLAYING:
-      if (buttonLEDMode == LED_MODE_DUEL) {
+      if (idlePauseBlend > 0) {
+        renderIdlePauseScreen(idlePauseFrame);
+
+        for (int i = 0; i < NUM_LEDS; i++) {
+          leds[i] = blend(idlePauseSnapshot[i], idlePauseFrame[i], idlePauseBlend);
+        }
+      } else if (buttonLEDMode == LED_MODE_DUEL) {
         if (!modeDotsActive && !settingsModeActive) {
           updateDuelGame();
         }
         renderDuelGame();
+      } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+        if (!modeDotsActive && !settingsModeActive) {
+          updateAllVsAllGame();
+        }
+        renderAllVsAllGame();
       } else if (buttonLEDMode == LED_MODE_COOP) {
         if (!modeDotsActive && !settingsModeActive) {
           updateCoopGame();
@@ -429,6 +481,10 @@ void initGame() {
   currentLevel = 1;
   playerLives = 3;  // Reset lives
   gameState = STATE_PLAYING;
+  idlePauseActive = false;
+  idlePauseTargetActive = false;
+  idlePauseBlend = 0;
+  lastUserActivityAt = millis();
   
   // Clear all shots
   for (int i = 0; i < MAX_SHOTS; i++) {
@@ -557,6 +613,12 @@ void handleButtons() {
   bool bluePressed = (digitalRead(BTN3_PIN) == LOW);
   bool whitePressed = (digitalRead(BTN4_PIN) == LOW);
 
+  if (redPressed || greenPressed || bluePressed || whitePressed) {
+    lastUserActivityAt = millis();
+    idlePauseTargetActive = false;
+    idlePauseActive = false;
+  }
+
   // Option C: enter settings only when Red+White held for 1s and no shots fired for 1s.
   if (!settingsModeActive && gameState == STATE_PLAYING) {
     if (redPressed && whitePressed) {
@@ -684,6 +746,8 @@ void handleButtons() {
       // Direct mapping: Button 1=0(Red), 2=1(Green), 3=2(Blue), 4=3(White)
       if (buttonLEDMode == LED_MODE_DUEL) {
         fireDuelShotPlayer1(i);
+      } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+        fireAllVsAllShotPlayer1(i);
       } else if (buttonLEDMode == LED_MODE_COOP) {
         fireCoopShotPlayer1(i);
       } else {
@@ -1087,6 +1151,9 @@ void processRemoteCommand() {
   
   uint8_t cmd = remoteCommand;
   remoteCommand = 0xFF;  // Clear command
+  lastUserActivityAt = millis();
+  idlePauseTargetActive = false;
+  idlePauseActive = false;
 
   if (settingsModeActive) {
     return;
@@ -1100,6 +1167,8 @@ void processRemoteCommand() {
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
           if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(0);
+          } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+            fireAllVsAllShotPlayer2(0);
           } else if (buttonLEDMode == LED_MODE_COOP) {
             fireCoopShotPlayer2(0);
           } else {
@@ -1113,6 +1182,8 @@ void processRemoteCommand() {
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
           if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(1);
+          } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+            fireAllVsAllShotPlayer2(1);
           } else if (buttonLEDMode == LED_MODE_COOP) {
             fireCoopShotPlayer2(1);
           } else {
@@ -1126,6 +1197,8 @@ void processRemoteCommand() {
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
           if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(2);
+          } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+            fireAllVsAllShotPlayer2(2);
           } else if (buttonLEDMode == LED_MODE_COOP) {
             fireCoopShotPlayer2(2);
           } else {
@@ -1140,6 +1213,8 @@ void processRemoteCommand() {
           if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
             if (buttonLEDMode == LED_MODE_DUEL) {
               fireDuelShotPlayer2(3);
+            } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+              fireAllVsAllShotPlayer2(3);
             } else if (buttonLEDMode == LED_MODE_COOP) {
               fireCoopShotPlayer2(3);
             } else {
@@ -1224,6 +1299,7 @@ const char* getButtonLEDModeName(ButtonLEDMode mode) {
     case LED_MODE_GHOST_BOSS: return "GHOST BOSS";
     case LED_MODE_DUEL: return "DUEL";
     case LED_MODE_COOP: return "CO-PLAY";
+    case LED_MODE_ALL_VS_ALL: return "ALL-VS-ALL";
     default: return "UNKNOWN";
   }
 }
@@ -1276,6 +1352,8 @@ void applySettingsSelectionAndExit() {
 void restartCurrentGameMode() {
   if (buttonLEDMode == LED_MODE_DUEL) {
     initDuelMode();
+  } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+    initAllVsAllMode();
   } else if (buttonLEDMode == LED_MODE_COOP) {
     initCoopMode();
   } else {
@@ -1305,6 +1383,8 @@ void updateModeDotsIndicator() {
     startMemoryPlaybackSequence();
   } else if (buttonLEDMode == LED_MODE_DUEL) {
     initDuelMode();
+  } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
+    initAllVsAllMode();
   } else if (buttonLEDMode == LED_MODE_COOP) {
     initCoopMode();
   }
@@ -1334,6 +1414,98 @@ void renderSettingsOverlay() {
     leds[0] = CRGB::White;
   } else {
     leds[0] = CRGB::Blue;
+  }
+}
+
+void updateIdlePauseState() {
+  if (gameState != STATE_PLAYING) {
+    idlePauseTargetActive = false;
+    idlePauseActive = false;
+    return;
+  }
+
+  if (settingsModeActive || modeDotsActive) {
+    idlePauseTargetActive = false;
+    idlePauseActive = false;
+    return;
+  }
+
+  unsigned long now = millis();
+  bool shouldPause = (now - lastUserActivityAt >= IDLE_PAUSE_TIMEOUT_MS);
+
+  if (shouldPause && !idlePauseTargetActive) {
+    idlePauseTargetActive = true;
+
+    // Snapshot current frame for smooth fade transition.
+    for (int i = 0; i < NUM_LEDS; i++) {
+      idlePauseSnapshot[i] = leds[i];
+    }
+
+    Serial.println("[INFO] Idle pause screen active");
+  } else if (!shouldPause && idlePauseTargetActive) {
+    idlePauseTargetActive = false;
+    Serial.println("[INFO] Idle pause screen leaving");
+  }
+
+  idlePauseActive = (idlePauseBlend == 255);
+}
+
+void updateIdlePauseBlend() {
+  unsigned long now = millis();
+  unsigned long delta = now - idlePauseLastBlendUpdate;
+  if (delta == 0) {
+    return;
+  }
+  idlePauseLastBlendUpdate = now;
+
+  uint16_t fadeMs = idlePauseTargetActive ? IDLE_PAUSE_FADE_IN_MS : IDLE_PAUSE_FADE_OUT_MS;
+  uint8_t step = (uint8_t)(((uint32_t)delta * 255) / fadeMs);
+  if (step == 0) {
+    step = 1;
+  }
+
+  if (idlePauseTargetActive) {
+    if (idlePauseBlend + step < idlePauseBlend) {
+      idlePauseBlend = 255;
+    } else {
+      uint16_t next = (uint16_t)idlePauseBlend + step;
+      idlePauseBlend = (next > 255) ? 255 : (uint8_t)next;
+    }
+  } else {
+    if (idlePauseBlend > step) {
+      idlePauseBlend -= step;
+    } else {
+      idlePauseBlend = 0;
+    }
+  }
+
+  idlePauseActive = (idlePauseBlend == 255);
+}
+
+void renderIdlePauseScreen(CRGB* out) {
+  // Slow mesmerizing aurora-like wave.
+  uint32_t t = millis();
+  for (int i = 0; i < NUM_LEDS; i++) {
+    uint8_t waveA = sin8((uint8_t)((i * 3) + (t / 14)));
+    uint8_t waveB = sin8((uint8_t)((i * 5) - (t / 19)));
+    uint8_t hue = (uint8_t)((i * 2) + (t / 26) + (waveB / 5));
+    uint8_t sat = 170;
+    uint8_t val = (uint8_t)(28 + (waveA / 3));
+    out[i] = CHSV(hue, sat, val);
+  }
+
+  // Gentle symmetric breathing highlights from both ends.
+  uint8_t breath = (uint8_t)(16 + (sin8((uint8_t)(t / 20)) / 6));
+  int glowDepth = NUM_LEDS / 10;
+  if (glowDepth < 2) glowDepth = 2;
+  for (int d = 0; d < glowDepth; d++) {
+    uint8_t scale = (uint8_t)(255 - ((uint16_t)d * 180 / glowDepth));
+    CRGB edge = CRGB(breath, breath, breath);
+    edge.nscale8_video(scale);
+    if (d < NUM_LEDS) {
+      out[d] += edge;
+      out[NUM_LEDS - 1 - d] += edge;
+    }
   }
 }
 
@@ -1649,6 +1821,288 @@ void renderDuelEndAnimation() {
       int pos = (duelWinner == 1) ? (head - t) : (head + t);
       if (pos >= centerStart && pos <= centerEnd && pos >= 0 && pos < NUM_LEDS) {
         leds[pos] = (t == 0) ? accentColor : winnerColor;
+      }
+    }
+  }
+}
+
+void initAllVsAllMode() {
+  gameState = STATE_PLAYING;
+  coopRound = 1;
+  allVsAllRoundOver = false;
+  allVsAllPlayersWin = false;
+  allVsAllRoundOverStart = 0;
+  allVsAllLossAnimationPlayed = false;
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    allVsAllPlayer1Shots[i].position = -1;
+    allVsAllPlayer2Shots[i].position = -1;
+    allVsAllPrevP1Shots[i] = -1;
+    allVsAllPrevP2Shots[i] = -1;
+  }
+
+  spawnAllVsAllRound();
+
+  Serial.println("[INFO] ALL-VS-ALL mode started");
+  Serial.println("[INFO] Boss expands from center like CO-PLAY");
+  Serial.println("[INFO] Players shoot from both ends like DUEL");
+}
+
+void spawnAllVsAllRound() {
+  allVsAllLossAnimationPlayed = false;
+
+  coopBossPartsThisRound = coopRound * 2;
+  if (coopBossPartsThisRound > MAX_COOP_BOSS_PARTS) {
+    coopBossPartsThisRound = MAX_COOP_BOSS_PARTS;
+  }
+
+  coopSpacingThisRound = coopRound - 1;
+  if (coopSpacingThisRound > 8) {
+    coopSpacingThisRound = 8;
+  }
+
+  int32_t calculatedSpeed = COOP_BOSS_INITIAL_SPEED - ((coopRound - 1) * COOP_BOSS_SPEED_DECREASE);
+  if (calculatedSpeed < COOP_BOSS_MIN_SPEED) {
+    coopBossSpeed = COOP_BOSS_MIN_SPEED;
+  } else {
+    coopBossSpeed = (uint16_t)calculatedSpeed;
+  }
+
+  for (int i = 0; i < MAX_COOP_BOSS_PARTS; i++) {
+    coopBoss[i].active = false;
+    coopBoss[i].position = -1;
+    coopBoss[i].color = 0;
+  }
+
+  int centerLeft = (NUM_LEDS - 1) / 2;
+  int centerRight = NUM_LEDS / 2;
+  coopBossLeftEdge = centerLeft;
+  coopBossRightEdge = centerRight;
+
+  for (int i = 0; i < coopBossPartsThisRound; i++) {
+    coopBoss[i].color = random(numColors);
+    coopBoss[i].active = true;
+  }
+
+  distributeCoopBossPositions();
+  coopLastBossMove = millis();
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    allVsAllPlayer1Shots[i].position = -1;
+    allVsAllPlayer2Shots[i].position = -1;
+    allVsAllPrevP1Shots[i] = -1;
+    allVsAllPrevP2Shots[i] = -1;
+  }
+
+  Serial.printf("[INFO] ALL-VS-ALL round %d: %d boss LEDs, area [%d..%d], speed %dms\n",
+                coopRound, coopBossPartsThisRound, coopBossLeftEdge, coopBossRightEdge, coopBossSpeed);
+}
+
+void fireAllVsAllShotPlayer1(uint8_t color) {
+  if (allVsAllRoundOver) return;
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    if (allVsAllPlayer1Shots[i].position == -1) {
+      allVsAllPlayer1Shots[i].position = PLAYER_SIZE;
+      allVsAllPlayer1Shots[i].color = color;
+      lastAnyShotFiredAt = millis();
+      return;
+    }
+  }
+}
+
+void fireAllVsAllShotPlayer2(uint8_t color) {
+  if (allVsAllRoundOver) return;
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    if (allVsAllPlayer2Shots[i].position == -1) {
+      allVsAllPlayer2Shots[i].position = NUM_LEDS - PLAYER_SIZE - 1;
+      allVsAllPlayer2Shots[i].color = color;
+      lastAnyShotFiredAt = millis();
+      return;
+    }
+  }
+}
+
+void resolveAllVsAllShotVsBossCollisions() {
+  // Correct color destroys visible boss part and consumes shot.
+  // Wrong color passes through boss.
+  for (int s = 0; s < MAX_SHOTS; s++) {
+    if (allVsAllPlayer1Shots[s].position != -1) {
+      int16_t hitIndex = findVisibleCoopBossIndexAtPosition(allVsAllPlayer1Shots[s].position);
+      if (hitIndex >= 0 && allVsAllPlayer1Shots[s].color == coopBoss[hitIndex].color) {
+        coopBoss[hitIndex].active = false;
+        allVsAllPlayer1Shots[s].position = -1;
+      }
+    }
+
+    if (allVsAllPlayer2Shots[s].position != -1) {
+      int16_t hitIndex = findVisibleCoopBossIndexAtPosition(allVsAllPlayer2Shots[s].position);
+      if (hitIndex >= 0 && allVsAllPlayer2Shots[s].color == coopBoss[hitIndex].color) {
+        coopBoss[hitIndex].active = false;
+        allVsAllPlayer2Shots[s].position = -1;
+      }
+    }
+  }
+}
+
+void resolveAllVsAllShotVsShotCollisions() {
+  // Only same-color shots cancel on collide/crossing.
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    if (allVsAllPlayer1Shots[i].position == -1) continue;
+
+    for (int j = 0; j < MAX_SHOTS; j++) {
+      if (allVsAllPlayer2Shots[j].position == -1) continue;
+
+      bool samePosition = (allVsAllPlayer1Shots[i].position == allVsAllPlayer2Shots[j].position);
+      bool crossed = (allVsAllPrevP1Shots[i] != -1 && allVsAllPrevP2Shots[j] != -1 &&
+                      allVsAllPrevP1Shots[i] < allVsAllPrevP2Shots[j] &&
+                      allVsAllPlayer1Shots[i].position > allVsAllPlayer2Shots[j].position);
+
+      if ((samePosition || crossed) && (allVsAllPlayer1Shots[i].color == allVsAllPlayer2Shots[j].color)) {
+        allVsAllPlayer1Shots[i].position = -1;
+        allVsAllPlayer2Shots[j].position = -1;
+        break;
+      }
+    }
+  }
+}
+
+void updateAllVsAllGame() {
+  if (allVsAllRoundOver) {
+    if (millis() - allVsAllRoundOverStart >= COOP_ROUND_END_MS) {
+      if (allVsAllPlayersWin) {
+        coopRound++;
+      } else {
+        coopRound = 1;
+      }
+      allVsAllRoundOver = false;
+      allVsAllPlayersWin = false;
+      spawnAllVsAllRound();
+    }
+    return;
+  }
+
+  unsigned long now = millis();
+
+  // Resolve current overlap before movement.
+  resolveAllVsAllShotVsBossCollisions();
+
+  if (now - coopLastBossMove >= coopBossSpeed) {
+    coopBossLeftEdge--;
+    coopBossRightEdge++;
+    distributeCoopBossPositions();
+    coopLastBossMove = now;
+
+    // Boss moved onto shots.
+    resolveAllVsAllShotVsBossCollisions();
+  }
+
+  if (now - lastShotMove >= SHOT_SPEED) {
+    for (int i = 0; i < MAX_SHOTS; i++) {
+      allVsAllPrevP1Shots[i] = allVsAllPlayer1Shots[i].position;
+      allVsAllPrevP2Shots[i] = allVsAllPlayer2Shots[i].position;
+    }
+
+    for (int i = 0; i < MAX_SHOTS; i++) {
+      if (allVsAllPlayer1Shots[i].position != -1) {
+        allVsAllPlayer1Shots[i].position++;
+        if (allVsAllPlayer1Shots[i].position >= NUM_LEDS) {
+          allVsAllPlayer1Shots[i].position = -1;
+        }
+      }
+
+      if (allVsAllPlayer2Shots[i].position != -1) {
+        allVsAllPlayer2Shots[i].position--;
+        if (allVsAllPlayer2Shots[i].position < 0) {
+          allVsAllPlayer2Shots[i].position = -1;
+        }
+      }
+    }
+
+    resolveAllVsAllShotVsShotCollisions();
+    resolveAllVsAllShotVsBossCollisions();
+
+    lastShotMove = now;
+  }
+
+  // Boss reaches either player side -> both players lose immediately.
+  for (int b = 0; b < coopBossPartsThisRound; b++) {
+    if (!coopBoss[b].active) continue;
+    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (NUM_LEDS - PLAYER_SIZE)) {
+      allVsAllRoundOver = true;
+      allVsAllPlayersWin = false;
+      allVsAllRoundOverStart = now;
+      allVsAllLossAnimationPlayed = false;
+      return;
+    }
+  }
+
+  bool anyActive = false;
+  for (int b = 0; b < coopBossPartsThisRound; b++) {
+    if (coopBoss[b].active) {
+      anyActive = true;
+      break;
+    }
+  }
+
+  if (!anyActive) {
+    allVsAllRoundOver = true;
+    allVsAllPlayersWin = true;
+    allVsAllRoundOverStart = now;
+  }
+}
+
+void renderAllVsAllGame() {
+  FastLED.clear();
+
+  for (int i = 0; i < PLAYER_SIZE; i++) {
+    leds[i] = CRGB::White;
+  }
+  for (int i = NUM_LEDS - PLAYER_SIZE; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::White;
+  }
+
+  int16_t bestOuterRank[NUM_LEDS];
+  for (int i = 0; i < NUM_LEDS; i++) {
+    bestOuterRank[i] = 32767;
+  }
+
+  for (int i = 0; i < coopBossPartsThisRound; i++) {
+    if (!coopBoss[i].active) continue;
+    int16_t pos = coopBoss[i].position;
+    if (pos < 0 || pos >= NUM_LEDS) continue;
+
+    int16_t leftDepth = i;
+    int16_t rightDepth = (coopBossPartsThisRound - 1) - i;
+    int16_t outerRank = (leftDepth < rightDepth) ? leftDepth : rightDepth;
+
+    if (outerRank <= bestOuterRank[pos]) {
+      bestOuterRank[pos] = outerRank;
+      leds[pos] = colorTable[coopBoss[i].color];
+    }
+  }
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    if (allVsAllPlayer1Shots[i].position >= 0 && allVsAllPlayer1Shots[i].position < NUM_LEDS) {
+      leds[allVsAllPlayer1Shots[i].position] = colorTable[allVsAllPlayer1Shots[i].color];
+    }
+  }
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    if (allVsAllPlayer2Shots[i].position >= 0 && allVsAllPlayer2Shots[i].position < NUM_LEDS) {
+      leds[allVsAllPlayer2Shots[i].position] = colorTable[allVsAllPlayer2Shots[i].color];
+    }
+  }
+
+  if (allVsAllRoundOver) {
+    if (allVsAllPlayersWin) {
+      unsigned long elapsed = millis() - allVsAllRoundOverStart;
+      renderSharedWinSparkle(elapsed);
+    } else {
+      if (!allVsAllLossAnimationPlayed) {
+        playLifeLostAnimation();
+        allVsAllLossAnimationPlayed = true;
       }
     }
   }
@@ -2151,6 +2605,17 @@ void updateButtonLEDs() {
 
     case LED_MODE_COOP:
       // In co-play mode, mirror Mode 1 behavior for player 1 physical buttons.
+      for (int i = 0; i < buttonsToControl; i++) {
+        bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
+        digitalWrite(btnLEDPins[i], buttonPressed ? LOW : HIGH);
+      }
+      if (numColors == 3) {
+        digitalWrite(BTN_LED_WHITE_PIN, LOW);
+      }
+      break;
+
+    case LED_MODE_ALL_VS_ALL:
+      // In all-vs-all mode, mirror Mode 1 behavior for player 1 physical buttons.
       for (int i = 0; i < buttonsToControl; i++) {
         bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
         digitalWrite(btnLEDPins[i], buttonPressed ? LOW : HIGH);
