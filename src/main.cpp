@@ -16,6 +16,7 @@
 #ifdef LED_SETUP_WS2812B_30
   #define LED_PIN     10
   #define NUM_LEDS    30
+  #define DEFAULT_ACTIVE_LED_COUNT 30
   #define LED_TYPE    WS2812B
   #define COLOR_ORDER GRB
   #define BOSS_START_POS 29      // Last LED position
@@ -29,10 +30,11 @@
 // Configuration for WS2815 with 288 LEDs
 #ifdef LED_SETUP_WS2815_288
   #define LED_PIN     10
-  #define NUM_LEDS    288
+  #define NUM_LEDS    300
+  #define DEFAULT_ACTIVE_LED_COUNT 288
   #define LED_TYPE    WS2815
   #define COLOR_ORDER RGB        // R and G swapped compared to WS2812B
-  #define BOSS_START_POS 287     // Last LED position
+  #define BOSS_START_POS 299     // Last LED position
   // Speed settings optimized for 288 LEDs (5x faster than 30 LED setup)
   #define BOSS_INITIAL_SPEED 300   // milliseconds per step (Level 1)
   #define BOSS_SPEED_DECREASE 30   // Speed increase per level (ms faster)
@@ -110,7 +112,7 @@ bool lastButtonState[NUM_BUTTONS] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 GameState gameState = STATE_PLAYING;
 uint8_t currentLevel = 1;
 uint8_t playerLives = 3;       // Player has 3 lives
-int16_t bossPosition = BOSS_START_POS;  // Changed from int8_t to support 288 LEDs
+int16_t bossPosition = BOSS_START_POS;  // Changed from int8_t to support longer strips
 BossPart boss[MAX_BOSS_PARTS]; // Boss grows each level
 Shot shots[MAX_SHOTS];
 unsigned long lastBossMove = 0;
@@ -152,6 +154,19 @@ uint8_t settingsSelectedNumColors = 3;
 unsigned long settingsLastInteraction = 0;
 unsigned long settingsRedHoldStart = 0;
 unsigned long lastAnyShotFiredAt = 0;
+bool settingsLengthAdjustActive = false;
+uint16_t activeLedCount = DEFAULT_ACTIVE_LED_COUNT;
+uint16_t settingsSelectedLedCount = DEFAULT_ACTIVE_LED_COUNT;
+unsigned long settingsWhiteHoldStart = 0;
+unsigned long settingsGreenHoldStart = 0;
+unsigned long settingsBlueHoldStart = 0;
+unsigned long settingsGreenRepeatAt = 0;
+unsigned long settingsBlueRepeatAt = 0;
+const uint16_t SETTINGS_WHITE_LONG_PRESS_MS = 900;
+const uint16_t SETTINGS_LENGTH_REPEAT_START_MS = 450;
+const uint16_t SETTINGS_LENGTH_REPEAT_MS = 90;
+const uint8_t SETTINGS_LENGTH_REPEAT_STEP = 5;
+const uint16_t SETTINGS_LED_COUNT_MIN = (NUM_LEDS >= 60) ? 60 : NUM_LEDS;
 
 // Idle pause screen
 bool idlePauseActive = false;
@@ -188,6 +203,9 @@ volatile uint8_t remoteCommand = 0xFF;  // 0xFF = no command
 volatile uint8_t lastRemoteSequence = 0;
 uint8_t ledBrightness = BRIGHTNESS;     // Current brightness (0-255)
 const uint8_t BRIGHTNESS_STEP = 26;     // Brightness adjustment step (10% of 255)
+
+// Allowed WiZRemote MAC address (only this remote can control the game)
+const uint8_t ALLOWED_REMOTE_MAC[6] = {0x98, 0x77, 0xD5, 0x98, 0x33, 0x8A};
 
 // Ghost Boss mode settings
 bool ghostBossModeEnabled = false;
@@ -253,6 +271,7 @@ bool allVsAllRoundOver = false;
 bool allVsAllPlayersWin = false;
 unsigned long allVsAllRoundOverStart = 0;
 bool allVsAllLossAnimationPlayed = false;
+uint8_t allVsAllWinner = 0;  // 0=none, 1=player1, 2=player2
 
 // ============================================
 // FUNCTION DECLARATIONS
@@ -315,6 +334,8 @@ void restartCurrentGameMode();
 void updateIdlePauseState();
 void updateIdlePauseBlend();
 void renderIdlePauseScreen(CRGB* out);
+void adjustSettingsLedCount(int16_t delta);
+void blackOutInactiveLeds();
 
 // ============================================
 // SETUP
@@ -353,9 +374,10 @@ void setup() {
     Serial.println("[INFO] Configuration: WS2812B (30 LEDs)");
   #endif
   #ifdef LED_SETUP_WS2815_288
-    Serial.println("[INFO] Configuration: WS2815 (288 LEDs)");
+    Serial.println("[INFO] Configuration: WS2815 (300 max LEDs)");
   #endif
-  Serial.printf("[INFO] LED Count: %d, Boss Start: %d\n", NUM_LEDS, BOSS_START_POS);
+  Serial.printf("[INFO] LED Max initialized: %d, Boss Start Max: %d\n", NUM_LEDS, BOSS_START_POS);
+  Serial.printf("[INFO] LED Active length (default): %d\n", activeLedCount);
   
   // Initialize buttons
   Serial.println("[INFO] Initializing buttons...");
@@ -469,6 +491,7 @@ void loop() {
 
   renderModeDotsIndicator();
   renderSettingsOverlay();
+  blackOutInactiveLeds();
   
   FastLED.show();
   delay(1000 / FRAMES_PER_SECOND);
@@ -497,7 +520,7 @@ void initGame() {
       modeDotsActive = true;
       modeDotsStartTime = millis();
   
-  Serial.printf("[INFO] Level %d started! Lives: %d\n", currentLevel, playerLives);
+  Serial.printf("[INFO] Level %d started! Lives: %d, Active LEDs: %d (Max %d)\n", currentLevel, playerLives, activeLedCount, NUM_LEDS);
 }
 
 void spawnBoss() {
@@ -530,7 +553,7 @@ void spawnBoss() {
   
   // Position boss so all parts are visible from start
   // Last part should be at BOSS_START_POS, first part at BOSS_START_POS - (numParts - 1)
-  bossPosition = BOSS_START_POS - (numParts - 1);
+  bossPosition = ((int16_t)activeLedCount - 1) - (numParts - 1);
   
   // Generate random colors for boss parts
   for (int i = 0; i < MAX_BOSS_PARTS; i++) {
@@ -574,7 +597,7 @@ void respawnBossAfterLifeLoss() {
   }
   
   // Reset boss to far end - single part
-  bossPosition = BOSS_START_POS;  // Far end of LED strip
+  bossPosition = (int16_t)activeLedCount - 1;  // Far end of active LED range
   lastBossMove = millis();
 
   // Reset ghost visibility timers on respawn.
@@ -630,11 +653,18 @@ void handleButtons() {
         settingsWaitRelease = true;
         settingsSelectedMode = buttonLEDMode;
         settingsSelectedNumColors = numColors;
+        settingsSelectedLedCount = activeLedCount;
+        settingsLengthAdjustActive = false;
         settingsLastInteraction = millis();
         settingsRedHoldStart = 0;
+        settingsWhiteHoldStart = 0;
+        settingsGreenHoldStart = 0;
+        settingsBlueHoldStart = 0;
+        settingsGreenRepeatAt = 0;
+        settingsBlueRepeatAt = 0;
         settingsChordStart = 0;
         Serial.println("[SETTINGS] Entered wired settings mode");
-        Serial.printf("[SETTINGS] Mode %d, Colors %d\n", (uint8_t)settingsSelectedMode + 1, settingsSelectedNumColors);
+        Serial.printf("[SETTINGS] Mode %d, Colors %d, LEDs %d\n", (uint8_t)settingsSelectedMode + 1, settingsSelectedNumColors, settingsSelectedLedCount);
       }
     } else {
       settingsChordStart = 0;
@@ -697,24 +727,84 @@ void handleButtons() {
     }
 
     // Green: mode up
-    if (lastButtonState[1] == HIGH && currentState[1]) {
-      settingsSelectedMode = (ButtonLEDMode)((settingsSelectedMode + 1) % LED_MODE_COUNT);
-      settingsLastInteraction = millis();
-      Serial.printf("[SETTINGS] Mode -> %d (%s)\n", (uint8_t)settingsSelectedMode + 1, getButtonLEDModeName(settingsSelectedMode));
-    }
+    if (settingsLengthAdjustActive) {
+      // White press exits LED length adjust sub-mode.
+      if (lastButtonState[3] == HIGH && currentState[3]) {
+        settingsLengthAdjustActive = false;
+        settingsWhiteHoldStart = 0;
+        settingsGreenHoldStart = 0;
+        settingsBlueHoldStart = 0;
+        settingsGreenRepeatAt = 0;
+        settingsBlueRepeatAt = 0;
+        settingsLastInteraction = millis();
+        Serial.println("[SETTINGS] LED length adjust OFF");
+      }
 
-    // Blue: mode down
-    if (lastButtonState[2] == HIGH && currentState[2]) {
-      settingsSelectedMode = (ButtonLEDMode)((settingsSelectedMode + LED_MODE_COUNT - 1) % LED_MODE_COUNT);
-      settingsLastInteraction = millis();
-      Serial.printf("[SETTINGS] Mode -> %d (%s)\n", (uint8_t)settingsSelectedMode + 1, getButtonLEDModeName(settingsSelectedMode));
-    }
+      // Green increase (press + long-press repeat in larger steps).
+      if (lastButtonState[1] == HIGH && currentState[1]) {
+        adjustSettingsLedCount(1);
+        settingsGreenHoldStart = millis();
+        settingsGreenRepeatAt = settingsGreenHoldStart + SETTINGS_LENGTH_REPEAT_START_MS;
+      }
+      if (currentState[1] && settingsGreenHoldStart != 0 && millis() >= settingsGreenRepeatAt) {
+        adjustSettingsLedCount(SETTINGS_LENGTH_REPEAT_STEP);
+        settingsGreenRepeatAt = millis() + SETTINGS_LENGTH_REPEAT_MS;
+      }
+      if (!currentState[1]) {
+        settingsGreenHoldStart = 0;
+        settingsGreenRepeatAt = 0;
+      }
 
-    // White: toggle 3/4 colors
-    if (lastButtonState[3] == HIGH && currentState[3]) {
-      settingsSelectedNumColors = (settingsSelectedNumColors == 3) ? 4 : 3;
-      settingsLastInteraction = millis();
-      Serial.printf("[SETTINGS] Colors -> %d\n", settingsSelectedNumColors);
+      // Blue decrease (press + long-press repeat in larger steps).
+      if (lastButtonState[2] == HIGH && currentState[2]) {
+        adjustSettingsLedCount(-1);
+        settingsBlueHoldStart = millis();
+        settingsBlueRepeatAt = settingsBlueHoldStart + SETTINGS_LENGTH_REPEAT_START_MS;
+      }
+      if (currentState[2] && settingsBlueHoldStart != 0 && millis() >= settingsBlueRepeatAt) {
+        adjustSettingsLedCount(-SETTINGS_LENGTH_REPEAT_STEP);
+        settingsBlueRepeatAt = millis() + SETTINGS_LENGTH_REPEAT_MS;
+      }
+      if (!currentState[2]) {
+        settingsBlueHoldStart = 0;
+        settingsBlueRepeatAt = 0;
+      }
+    } else {
+      // Green: mode up
+      if (lastButtonState[1] == HIGH && currentState[1]) {
+        settingsSelectedMode = (ButtonLEDMode)((settingsSelectedMode + 1) % LED_MODE_COUNT);
+        settingsLastInteraction = millis();
+        Serial.printf("[SETTINGS] Mode -> %d (%s)\n", (uint8_t)settingsSelectedMode + 1, getButtonLEDModeName(settingsSelectedMode));
+      }
+
+      // Blue: mode down
+      if (lastButtonState[2] == HIGH && currentState[2]) {
+        settingsSelectedMode = (ButtonLEDMode)((settingsSelectedMode + LED_MODE_COUNT - 1) % LED_MODE_COUNT);
+        settingsLastInteraction = millis();
+        Serial.printf("[SETTINGS] Mode -> %d (%s)\n", (uint8_t)settingsSelectedMode + 1, getButtonLEDModeName(settingsSelectedMode));
+      }
+
+      // White short press: toggle 3/4 colors. White long press: enter LED length adjust.
+      if (currentState[3]) {
+        if (settingsWhiteHoldStart == 0) {
+          settingsWhiteHoldStart = millis();
+        } else if (millis() - settingsWhiteHoldStart >= SETTINGS_WHITE_LONG_PRESS_MS) {
+          settingsLengthAdjustActive = true;
+          settingsWhiteHoldStart = 0;
+          settingsLastInteraction = millis();
+          Serial.printf("[SETTINGS] LED length adjust ON (Green/Blue change, current %d)\n", settingsSelectedLedCount);
+        }
+      } else {
+        if (settingsWhiteHoldStart != 0) {
+          unsigned long held = millis() - settingsWhiteHoldStart;
+          settingsWhiteHoldStart = 0;
+          if (held < SETTINGS_WHITE_LONG_PRESS_MS) {
+            settingsSelectedNumColors = (settingsSelectedNumColors == 3) ? 4 : 3;
+            settingsLastInteraction = millis();
+            Serial.printf("[SETTINGS] Colors -> %d\n", settingsSelectedNumColors);
+          }
+        }
+      }
     }
 
     for (int i = 0; i < 4; i++) {
@@ -861,7 +951,7 @@ void updateShots() {
         shots[i].position++;
         
         // Remove shot if it goes off screen
-        if (shots[i].position >= NUM_LEDS) {
+        if (shots[i].position >= activeLedCount) {
           Serial.printf("[DEBUG] Shot %d reached end of strip (pos %d), removed\n", i, shots[i].position);
           shots[i].position = -1;
         }
@@ -965,7 +1055,7 @@ void renderGame() {
     for (int i = 0; i < MAX_BOSS_PARTS; i++) {
       if (boss[i].active) {
         int pos = bossPosition + i;
-        if (pos >= 0 && pos < NUM_LEDS) {
+        if (pos >= 0 && pos < activeLedCount) {
           if (!blackoutNow) {
             CRGB bossColor = colorTable[boss[i].color];
             if (ghostBossModeEnabled && ghostBossFadingOut) {
@@ -980,7 +1070,7 @@ void renderGame() {
   
   // Draw shots
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (shots[i].position >= 0 && shots[i].position < NUM_LEDS) {
+    if (shots[i].position >= 0 && shots[i].position < activeLedCount) {
       leds[shots[i].position] = shots[i].rgbColor;
     }
   }
@@ -1011,7 +1101,7 @@ void renderSharedWinSparkle(unsigned long elapsed) {
   // Create 10-15 random sparkles each frame
   int numSparkles = random(10, 16);
   for (int i = 0; i < numSparkles; i++) {
-    int pos = random(NUM_LEDS);
+    int pos = random(activeLedCount);
     // Alternate between white and gold
     if (random(2) == 0) {
       leds[pos] = CRGB::White;
@@ -1027,11 +1117,11 @@ void playLoseAnimation() {
   if (elapsed < LOSE_ANIMATION_DURATION) {
     // Explosion pattern - red flashing
     if ((elapsed / 200) % 2 == 0) {
-      for (int i = 0; i < NUM_LEDS; i++) {
+      for (int i = 0; i < activeLedCount; i++) {
         leds[i] = CRGB::Red;
       }
     } else {
-      for (int i = 0; i < NUM_LEDS; i++) {
+      for (int i = 0; i < activeLedCount; i++) {
         leds[i] = CRGB::Orange;
       }
     }
@@ -1049,47 +1139,54 @@ void playLifeLostAnimation() {
   const uint16_t SLOW_FADE_STEP_MS = 20;
 
   // Pulse 1: short "da"
-  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  fill_solid(leds, activeLedCount, CRGB::Red);
+  blackOutInactiveLeds();
   FastLED.show();
   delay(70);
   for (uint8_t step = 0; step <= FAST_FADE_STEPS; step++) {
     uint8_t level = (uint8_t)(255 - ((uint32_t)step * 255 / FAST_FADE_STEPS));
     CRGB c = CRGB::Red;
     c.nscale8_video(level);
-    fill_solid(leds, NUM_LEDS, c);
+    fill_solid(leds, activeLedCount, c);
+    blackOutInactiveLeds();
     FastLED.show();
     delay(FAST_FADE_STEP_MS);
   }
   delay(60);
 
   // Pulse 2: short "da"
-  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  fill_solid(leds, activeLedCount, CRGB::Red);
+  blackOutInactiveLeds();
   FastLED.show();
   delay(70);
   for (uint8_t step = 0; step <= FAST_FADE_STEPS; step++) {
     uint8_t level = (uint8_t)(255 - ((uint32_t)step * 255 / FAST_FADE_STEPS));
     CRGB c = CRGB::Red;
     c.nscale8_video(level);
-    fill_solid(leds, NUM_LEDS, c);
+    fill_solid(leds, activeLedCount, c);
+    blackOutInactiveLeds();
     FastLED.show();
     delay(FAST_FADE_STEP_MS);
   }
   delay(60);
 
   // Pulse 3: long "daaaaa"
-  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  fill_solid(leds, activeLedCount, CRGB::Red);
+  blackOutInactiveLeds();
   FastLED.show();
   delay(180);
   for (uint8_t step = 0; step <= SLOW_FADE_STEPS; step++) {
     uint8_t level = (uint8_t)(255 - ((uint32_t)step * 255 / SLOW_FADE_STEPS));
     CRGB c = CRGB::Red;
     c.nscale8_video(level);
-    fill_solid(leds, NUM_LEDS, c);
+    fill_solid(leds, activeLedCount, c);
+    blackOutInactiveLeds();
     FastLED.show();
     delay(SLOW_FADE_STEP_MS);
   }
 
-  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  fill_solid(leds, activeLedCount, CRGB::Black);
+  blackOutInactiveLeds();
   FastLED.show();
   delay(120);
 }
@@ -1121,6 +1218,18 @@ void initESPNOW() {
 
 void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
   // This runs in interrupt context - keep it SHORT!
+
+  // Filter by allowed remote MAC.
+  bool macAllowed = true;
+  for (int i = 0; i < 6; i++) {
+    if (recv_info->src_addr[i] != ALLOWED_REMOTE_MAC[i]) {
+      macAllowed = false;
+      break;
+    }
+  }
+  if (!macAllowed) {
+    return;
+  }
   
   // Log sender MAC address
   char macStr[18];
@@ -1338,15 +1447,26 @@ void applySettingsSelectionAndExit() {
   settingsWaitRelease = false;
   settingsRedHoldStart = 0;
 
+  bool ledLengthChanged = (activeLedCount != settingsSelectedLedCount);
+
   buttonLEDMode = settingsSelectedMode;
   numColors = settingsSelectedNumColors;
+  activeLedCount = settingsSelectedLedCount;
+  settingsLengthAdjustActive = false;
+
+  if (ledLengthChanged) {
+    Serial.printf("[SETTINGS] Applied LED length %d -> restarting game mode\n", activeLedCount);
+    restartCurrentGameMode();
+    return;
+  }
 
   startModeSelectionIndicator();
 
-  Serial.printf("[SETTINGS] Applied: Mode %d (%s), Colors %d\n",
+  Serial.printf("[SETTINGS] Applied: Mode %d (%s), Colors %d, LEDs %d\n",
                 (uint8_t)buttonLEDMode + 1,
                 getButtonLEDModeName(buttonLEDMode),
-                numColors);
+                numColors,
+                activeLedCount);
 }
 
 void restartCurrentGameMode() {
@@ -1395,16 +1515,32 @@ void updateModeDotsIndicator() {
 void renderSettingsOverlay() {
   if (!settingsModeActive) return;
 
+  if (settingsLengthAdjustActive) {
+    // LED length preview: active region dim blue, endpoint white, inactive region black.
+    for (int i = 0; i < NUM_LEDS; i++) {
+      if (i < settingsSelectedLedCount) {
+        leds[i] = CRGB(0, 0, 20);
+      } else {
+        leds[i] = CRGB::Black;
+      }
+    }
+    int endPos = settingsSelectedLedCount - 1;
+    if (endPos >= 0 && endPos < NUM_LEDS) {
+      leds[endPos] = CRGB::White;
+    }
+    return;
+  }
+
   // Show selected mode as lilac dots at far end.
   uint8_t modeNumber = (uint8_t)settingsSelectedMode + 1;
   for (uint8_t dot = 0; dot < modeNumber; dot++) {
-    int dotEndPos = (NUM_LEDS - 1) - (dot * 4);
+    int dotEndPos = ((int)activeLedCount - 1) - (dot * 4);
     int dotStartPos = dotEndPos - 1;
 
-    if (dotStartPos >= 0 && dotStartPos < NUM_LEDS) {
+    if (dotStartPos >= 0 && dotStartPos < activeLedCount) {
       leds[dotStartPos] = MODE_DOT_COLOR;
     }
-    if (dotEndPos >= 0 && dotEndPos < NUM_LEDS) {
+    if (dotEndPos >= 0 && dotEndPos < activeLedCount) {
       leds[dotEndPos] = MODE_DOT_COLOR;
     }
   }
@@ -1485,7 +1621,7 @@ void updateIdlePauseBlend() {
 void renderIdlePauseScreen(CRGB* out) {
   // Slow mesmerizing aurora-like wave.
   uint32_t t = millis();
-  for (int i = 0; i < NUM_LEDS; i++) {
+  for (int i = 0; i < activeLedCount; i++) {
     uint8_t waveA = sin8((uint8_t)((i * 3) + (t / 14)));
     uint8_t waveB = sin8((uint8_t)((i * 5) - (t / 19)));
     uint8_t hue = (uint8_t)((i * 2) + (t / 26) + (waveB / 5));
@@ -1493,18 +1629,21 @@ void renderIdlePauseScreen(CRGB* out) {
     uint8_t val = (uint8_t)(28 + (waveA / 3));
     out[i] = CHSV(hue, sat, val);
   }
+  for (int i = activeLedCount; i < NUM_LEDS; i++) {
+    out[i] = CRGB::Black;
+  }
 
   // Gentle symmetric breathing highlights from both ends.
   uint8_t breath = (uint8_t)(16 + (sin8((uint8_t)(t / 20)) / 6));
-  int glowDepth = NUM_LEDS / 10;
+  int glowDepth = activeLedCount / 10;
   if (glowDepth < 2) glowDepth = 2;
   for (int d = 0; d < glowDepth; d++) {
     uint8_t scale = (uint8_t)(255 - ((uint16_t)d * 180 / glowDepth));
     CRGB edge = CRGB(breath, breath, breath);
     edge.nscale8_video(scale);
-    if (d < NUM_LEDS) {
+    if (d < activeLedCount) {
       out[d] += edge;
-      out[NUM_LEDS - 1 - d] += edge;
+      out[activeLedCount - 1 - d] += edge;
     }
   }
 }
@@ -1514,13 +1653,13 @@ void renderModeDotsIndicator() {
 
   uint8_t modeNumber = (uint8_t)buttonLEDMode + 1;
   for (uint8_t dot = 0; dot < modeNumber; dot++) {
-    int dotEndPos = (NUM_LEDS - 1) - (dot * 4);
+    int dotEndPos = ((int)activeLedCount - 1) - (dot * 4);
     int dotStartPos = dotEndPos - 1;
 
-    if (dotStartPos >= 0 && dotStartPos < NUM_LEDS) {
+    if (dotStartPos >= 0 && dotStartPos < activeLedCount) {
       leds[dotStartPos] = MODE_DOT_COLOR;
     }
-    if (dotEndPos >= 0 && dotEndPos < NUM_LEDS) {
+    if (dotEndPos >= 0 && dotEndPos < activeLedCount) {
       leds[dotEndPos] = MODE_DOT_COLOR;
     }
   }
@@ -1641,7 +1780,7 @@ void fireDuelShotPlayer2(uint8_t color) {
 
   for (int i = 0; i < MAX_SHOTS; i++) {
     if (player2Shots[i].position == -1) {
-      player2Shots[i].position = NUM_LEDS - PLAYER_SIZE - 1;
+      player2Shots[i].position = activeLedCount - PLAYER_SIZE - 1;
       player2Shots[i].color = color;
       lastAnyShotFiredAt = millis();
       Serial.printf("[DUEL] P2 fired %d from pos %d\n", color, player2Shots[i].position);
@@ -1675,7 +1814,7 @@ void updateDuelGame() {
   for (int i = 0; i < MAX_SHOTS; i++) {
     if (player1Shots[i].position != -1) {
       player1Shots[i].position++;
-      if (player1Shots[i].position >= NUM_LEDS) {
+      if (player1Shots[i].position >= activeLedCount) {
         player1Shots[i].position = -1;
       }
     }
@@ -1710,7 +1849,7 @@ void updateDuelGame() {
 
   // Win condition: hit opponent zone.
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (player1Shots[i].position >= NUM_LEDS - PLAYER_SIZE) {
+    if (player1Shots[i].position >= activeLedCount - PLAYER_SIZE) {
       duelGameOver = true;
       duelWinner = 1;
       duelGameOverStart = millis();
@@ -1739,20 +1878,20 @@ void renderDuelGame() {
   for (int i = 0; i < PLAYER_SIZE; i++) {
     leds[i] = CRGB::White;
   }
-  for (int i = NUM_LEDS - PLAYER_SIZE; i < NUM_LEDS; i++) {
+  for (int i = activeLedCount - PLAYER_SIZE; i < activeLedCount; i++) {
     leds[i] = CRGB::White;
   }
 
   // Shots from player 1
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (player1Shots[i].position >= 0 && player1Shots[i].position < NUM_LEDS) {
+    if (player1Shots[i].position >= 0 && player1Shots[i].position < activeLedCount) {
       leds[player1Shots[i].position] = colorTable[player1Shots[i].color];
     }
   }
 
   // Shots from player 2
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (player2Shots[i].position >= 0 && player2Shots[i].position < NUM_LEDS) {
+    if (player2Shots[i].position >= 0 && player2Shots[i].position < activeLedCount) {
       leds[player2Shots[i].position] = colorTable[player2Shots[i].color];
     }
   }
@@ -1765,24 +1904,24 @@ void renderDuelEndAnimation() {
   CRGB accentColor = CRGB::White;
   CRGB loserColor = CRGB::DarkRed;
 
-  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  fill_solid(leds, activeLedCount, CRGB::Black);
 
   int winnerStart = 0;
-  int winnerEnd = NUM_LEDS / 3;
-  int loserStart = (NUM_LEDS * 2) / 3;
-  int loserEnd = NUM_LEDS - 1;
+  int winnerEnd = activeLedCount / 3;
+  int loserStart = (activeLedCount * 2) / 3;
+  int loserEnd = activeLedCount - 1;
 
   if (duelWinner == 2) {
-    winnerStart = (NUM_LEDS * 2) / 3;
-    winnerEnd = NUM_LEDS - 1;
+    winnerStart = (activeLedCount * 2) / 3;
+    winnerEnd = activeLedCount - 1;
     loserStart = 0;
-    loserEnd = NUM_LEDS / 3;
+    loserEnd = activeLedCount / 3;
   }
 
   // WINNER ZONE: bright and energetic (rapid strobe + sparkles).
   bool winnerFlash = ((elapsed / 70) % 2) == 0;
   for (int i = winnerStart; i <= winnerEnd; i++) {
-    if (i < 0 || i >= NUM_LEDS) continue;
+    if (i < 0 || i >= activeLedCount) continue;
     leds[i] = winnerFlash ? winnerColor : accentColor;
   }
 
@@ -1791,7 +1930,7 @@ void renderDuelEndAnimation() {
       int span = winnerEnd - winnerStart + 1;
       if (span < 1) span = 1;
       int pos = winnerStart + random(span);
-      if (pos >= 0 && pos < NUM_LEDS) {
+      if (pos >= 0 && pos < activeLedCount) {
         leds[pos] = (random8() < 140) ? accentColor : winnerColor;
       }
     }
@@ -1800,7 +1939,7 @@ void renderDuelEndAnimation() {
   // LOSER ZONE: dim, slow, and striped (visually opposite of winner zone).
   uint8_t loserPulse = (uint8_t)(20 + ((elapsed / 8) % 50));
   for (int i = loserStart; i <= loserEnd; i++) {
-    if (i < 0 || i >= NUM_LEDS) continue;
+    if (i < 0 || i >= activeLedCount) continue;
     if (((i + (elapsed / 180)) % 2) == 0) {
       CRGB c = loserColor;
       c.nscale8_video(loserPulse);
@@ -1819,7 +1958,7 @@ void renderDuelEndAnimation() {
 
     for (int t = 0; t < 6; t++) {
       int pos = (duelWinner == 1) ? (head - t) : (head + t);
-      if (pos >= centerStart && pos <= centerEnd && pos >= 0 && pos < NUM_LEDS) {
+      if (pos >= centerStart && pos <= centerEnd && pos >= 0 && pos < activeLedCount) {
         leds[pos] = (t == 0) ? accentColor : winnerColor;
       }
     }
@@ -1831,6 +1970,7 @@ void initAllVsAllMode() {
   coopRound = 1;
   allVsAllRoundOver = false;
   allVsAllPlayersWin = false;
+  allVsAllWinner = 0;
   allVsAllRoundOverStart = 0;
   allVsAllLossAnimationPlayed = false;
 
@@ -1850,6 +1990,7 @@ void initAllVsAllMode() {
 
 void spawnAllVsAllRound() {
   allVsAllLossAnimationPlayed = false;
+  allVsAllWinner = 0;
 
   coopBossPartsThisRound = coopRound * 2;
   if (coopBossPartsThisRound > MAX_COOP_BOSS_PARTS) {
@@ -1874,8 +2015,8 @@ void spawnAllVsAllRound() {
     coopBoss[i].color = 0;
   }
 
-  int centerLeft = (NUM_LEDS - 1) / 2;
-  int centerRight = NUM_LEDS / 2;
+  int centerLeft = (activeLedCount - 1) / 2;
+  int centerRight = activeLedCount / 2;
   coopBossLeftEdge = centerLeft;
   coopBossRightEdge = centerRight;
 
@@ -1916,7 +2057,7 @@ void fireAllVsAllShotPlayer2(uint8_t color) {
 
   for (int i = 0; i < MAX_SHOTS; i++) {
     if (allVsAllPlayer2Shots[i].position == -1) {
-      allVsAllPlayer2Shots[i].position = NUM_LEDS - PLAYER_SIZE - 1;
+      allVsAllPlayer2Shots[i].position = activeLedCount - PLAYER_SIZE - 1;
       allVsAllPlayer2Shots[i].color = color;
       lastAnyShotFiredAt = millis();
       return;
@@ -2007,7 +2148,7 @@ void updateAllVsAllGame() {
     for (int i = 0; i < MAX_SHOTS; i++) {
       if (allVsAllPlayer1Shots[i].position != -1) {
         allVsAllPlayer1Shots[i].position++;
-        if (allVsAllPlayer1Shots[i].position >= NUM_LEDS) {
+        if (allVsAllPlayer1Shots[i].position >= activeLedCount) {
           allVsAllPlayer1Shots[i].position = -1;
         }
       }
@@ -2026,12 +2167,45 @@ void updateAllVsAllGame() {
     lastShotMove = now;
   }
 
+  // Player kill detection: shots that reach opponent home zone eliminate that player.
+  bool player1Hit = false;
+  bool player2Hit = false;
+
+  for (int i = 0; i < MAX_SHOTS; i++) {
+    if (allVsAllPlayer1Shots[i].position >= activeLedCount - PLAYER_SIZE) {
+      player2Hit = true;
+    }
+    if (allVsAllPlayer2Shots[i].position != -1 && allVsAllPlayer2Shots[i].position <= (PLAYER_SIZE - 1)) {
+      player1Hit = true;
+    }
+  }
+
+  if (player1Hit || player2Hit) {
+    allVsAllRoundOver = true;
+    allVsAllPlayersWin = false;
+    allVsAllRoundOverStart = now;
+    allVsAllLossAnimationPlayed = false;
+
+    if (player1Hit && !player2Hit) {
+      allVsAllWinner = 2;
+      Serial.println("[ALL-VS-ALL] Player 2 wins (Player 1 hit)");
+    } else if (player2Hit && !player1Hit) {
+      allVsAllWinner = 1;
+      Serial.println("[ALL-VS-ALL] Player 1 wins (Player 2 hit)");
+    } else {
+      allVsAllWinner = 0;
+      Serial.println("[ALL-VS-ALL] Both players hit in same tick");
+    }
+    return;
+  }
+
   // Boss reaches either player side -> both players lose immediately.
   for (int b = 0; b < coopBossPartsThisRound; b++) {
     if (!coopBoss[b].active) continue;
-    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (NUM_LEDS - PLAYER_SIZE)) {
+    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (activeLedCount - PLAYER_SIZE)) {
       allVsAllRoundOver = true;
       allVsAllPlayersWin = false;
+      allVsAllWinner = 0;
       allVsAllRoundOverStart = now;
       allVsAllLossAnimationPlayed = false;
       return;
@@ -2049,6 +2223,7 @@ void updateAllVsAllGame() {
   if (!anyActive) {
     allVsAllRoundOver = true;
     allVsAllPlayersWin = true;
+    allVsAllWinner = 0;
     allVsAllRoundOverStart = now;
   }
 }
@@ -2059,19 +2234,19 @@ void renderAllVsAllGame() {
   for (int i = 0; i < PLAYER_SIZE; i++) {
     leds[i] = CRGB::White;
   }
-  for (int i = NUM_LEDS - PLAYER_SIZE; i < NUM_LEDS; i++) {
+  for (int i = activeLedCount - PLAYER_SIZE; i < activeLedCount; i++) {
     leds[i] = CRGB::White;
   }
 
   int16_t bestOuterRank[NUM_LEDS];
-  for (int i = 0; i < NUM_LEDS; i++) {
+  for (int i = 0; i < activeLedCount; i++) {
     bestOuterRank[i] = 32767;
   }
 
   for (int i = 0; i < coopBossPartsThisRound; i++) {
     if (!coopBoss[i].active) continue;
     int16_t pos = coopBoss[i].position;
-    if (pos < 0 || pos >= NUM_LEDS) continue;
+    if (pos < 0 || pos >= activeLedCount) continue;
 
     int16_t leftDepth = i;
     int16_t rightDepth = (coopBossPartsThisRound - 1) - i;
@@ -2084,13 +2259,13 @@ void renderAllVsAllGame() {
   }
 
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (allVsAllPlayer1Shots[i].position >= 0 && allVsAllPlayer1Shots[i].position < NUM_LEDS) {
+    if (allVsAllPlayer1Shots[i].position >= 0 && allVsAllPlayer1Shots[i].position < activeLedCount) {
       leds[allVsAllPlayer1Shots[i].position] = colorTable[allVsAllPlayer1Shots[i].color];
     }
   }
 
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (allVsAllPlayer2Shots[i].position >= 0 && allVsAllPlayer2Shots[i].position < NUM_LEDS) {
+    if (allVsAllPlayer2Shots[i].position >= 0 && allVsAllPlayer2Shots[i].position < activeLedCount) {
       leds[allVsAllPlayer2Shots[i].position] = colorTable[allVsAllPlayer2Shots[i].color];
     }
   }
@@ -2099,6 +2274,16 @@ void renderAllVsAllGame() {
     if (allVsAllPlayersWin) {
       unsigned long elapsed = millis() - allVsAllRoundOverStart;
       renderSharedWinSparkle(elapsed);
+    } else if (allVsAllWinner == 1 || allVsAllWinner == 2) {
+      uint8_t previousDuelWinner = duelWinner;
+      unsigned long previousDuelGameOverStart = duelGameOverStart;
+
+      duelWinner = allVsAllWinner;
+      duelGameOverStart = allVsAllRoundOverStart;
+      renderDuelEndAnimation();
+
+      duelWinner = previousDuelWinner;
+      duelGameOverStart = previousDuelGameOverStart;
     } else {
       if (!allVsAllLossAnimationPlayed) {
         playLifeLostAnimation();
@@ -2153,8 +2338,8 @@ void spawnCoopBossRound() {
     coopBoss[i].color = 0;
   }
 
-  int centerLeft = (NUM_LEDS - 1) / 2;
-  int centerRight = NUM_LEDS / 2;
+  int centerLeft = (activeLedCount - 1) / 2;
+  int centerRight = activeLedCount / 2;
   coopBossLeftEdge = centerLeft;
   coopBossRightEdge = centerRight;
 
@@ -2237,7 +2422,7 @@ void fireCoopShotPlayer2(uint8_t color) {
 
   for (int i = 0; i < MAX_SHOTS; i++) {
     if (coopPlayer2Shots[i].position == -1) {
-      coopPlayer2Shots[i].position = NUM_LEDS - PLAYER_SIZE - 1;
+      coopPlayer2Shots[i].position = activeLedCount - PLAYER_SIZE - 1;
       coopPlayer2Shots[i].color = color;
       lastAnyShotFiredAt = millis();
       return;
@@ -2281,7 +2466,7 @@ void updateCoopGame() {
     for (int i = 0; i < MAX_SHOTS; i++) {
       if (coopPlayer1Shots[i].position != -1) {
         coopPlayer1Shots[i].position++;
-        if (coopPlayer1Shots[i].position >= NUM_LEDS) {
+        if (coopPlayer1Shots[i].position >= activeLedCount) {
           coopPlayer1Shots[i].position = -1;
         }
       }
@@ -2302,7 +2487,7 @@ void updateCoopGame() {
   // Lose if any active boss part reaches either player's home zone.
   for (int b = 0; b < coopBossPartsThisRound; b++) {
     if (!coopBoss[b].active) continue;
-    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (NUM_LEDS - PLAYER_SIZE)) {
+    if (coopBoss[b].position <= (PLAYER_SIZE - 1) || coopBoss[b].position >= (activeLedCount - PLAYER_SIZE)) {
       coopRoundOver = true;
       coopRoundWon = false;
       coopRoundOverStart = now;
@@ -2369,20 +2554,20 @@ void renderCoopGame() {
   for (int i = 0; i < PLAYER_SIZE; i++) {
     leds[i] = CRGB::White;
   }
-  for (int i = NUM_LEDS - PLAYER_SIZE; i < NUM_LEDS; i++) {
+  for (int i = activeLedCount - PLAYER_SIZE; i < activeLedCount; i++) {
     leds[i] = CRGB::White;
   }
 
   // Boss LEDs. If multiple overlap, inner are drawn first and outer-most color wins.
   int16_t bestOuterRank[NUM_LEDS];
-  for (int i = 0; i < NUM_LEDS; i++) {
+  for (int i = 0; i < activeLedCount; i++) {
     bestOuterRank[i] = 32767;
   }
 
   for (int i = 0; i < coopBossPartsThisRound; i++) {
     if (!coopBoss[i].active) continue;
     int16_t pos = coopBoss[i].position;
-    if (pos < 0 || pos >= NUM_LEDS) continue;
+    if (pos < 0 || pos >= activeLedCount) continue;
 
     int16_t leftDepth = i;
     int16_t rightDepth = (coopBossPartsThisRound - 1) - i;
@@ -2396,14 +2581,14 @@ void renderCoopGame() {
 
   // Shots from player 1.
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (coopPlayer1Shots[i].position >= 0 && coopPlayer1Shots[i].position < NUM_LEDS) {
+    if (coopPlayer1Shots[i].position >= 0 && coopPlayer1Shots[i].position < activeLedCount) {
       leds[coopPlayer1Shots[i].position] = colorTable[coopPlayer1Shots[i].color];
     }
   }
 
   // Shots from player 2.
   for (int i = 0; i < MAX_SHOTS; i++) {
-    if (coopPlayer2Shots[i].position >= 0 && coopPlayer2Shots[i].position < NUM_LEDS) {
+    if (coopPlayer2Shots[i].position >= 0 && coopPlayer2Shots[i].position < activeLedCount) {
       leds[coopPlayer2Shots[i].position] = colorTable[coopPlayer2Shots[i].color];
     }
   }
@@ -2624,5 +2809,27 @@ void updateButtonLEDs() {
         digitalWrite(BTN_LED_WHITE_PIN, LOW);
       }
       break;
+  }
+}
+
+void adjustSettingsLedCount(int16_t delta) {
+  int32_t next = (int32_t)settingsSelectedLedCount + delta;
+  if (next < SETTINGS_LED_COUNT_MIN) {
+    next = SETTINGS_LED_COUNT_MIN;
+  }
+  if (next > NUM_LEDS) {
+    next = NUM_LEDS;
+  }
+
+  if ((uint16_t)next != settingsSelectedLedCount) {
+    settingsSelectedLedCount = (uint16_t)next;
+    settingsLastInteraction = millis();
+    Serial.printf("[SETTINGS] LED count -> %d\n", settingsSelectedLedCount);
+  }
+}
+
+void blackOutInactiveLeds() {
+  for (int i = activeLedCount; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
   }
 }
