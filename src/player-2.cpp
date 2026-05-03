@@ -14,9 +14,14 @@
 #define BTN2_PIN 1
 #define BTN3_PIN 2
 #define BTN4_PIN 3
+#define BTN_LED_RED_PIN 5
+#define BTN_LED_GREEN_PIN 6
+#define BTN_LED_BLUE_PIN 7
+#define BTN_LED_WHITE_PIN 8
 
 static const uint8_t BUTTON_COUNT = 4;
 static const uint8_t buttonPins[BUTTON_COUNT] = {BTN1_PIN, BTN2_PIN, BTN3_PIN, BTN4_PIN};
+static const uint8_t buttonLedPins[BUTTON_COUNT] = {BTN_LED_RED_PIN, BTN_LED_GREEN_PIN, BTN_LED_BLUE_PIN, BTN_LED_WHITE_PIN};
 static const uint8_t buttonCodes[BUTTON_COUNT] = {0x10, 0x11, 0x12, 0x13};
 static const char* buttonNames[BUTTON_COUNT] = {"RED", "GREEN", "BLUE", "WHITE"};
 
@@ -136,6 +141,22 @@ void setupButtons() {
   Serial.println("[TX] Buttons initialized on GPIO0-3");
 }
 
+void setupButtonLeds() {
+  for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
+    pinMode(buttonLedPins[i], OUTPUT);
+    digitalWrite(buttonLedPins[i], HIGH);
+  }
+
+  Serial.println("[TX] Button LEDs initialized on GPIO5-8");
+}
+
+void updateButtonLeds() {
+  for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
+    bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
+    digitalWrite(buttonLedPins[i], buttonPressed ? LOW : HIGH);
+  }
+}
+
 void pollButtons() {
   unsigned long now = millis();
 
@@ -150,6 +171,8 @@ void pollButtons() {
 
     lastButtonState[i] = currentState;
   }
+
+  updateButtonLeds();
 }
 
 void setup() {
@@ -162,6 +185,7 @@ void setup() {
   Serial.println("========================================");
 
   setupButtons();
+  setupButtonLeds();
   initWiFi();
 
   if (!initEspNow()) {

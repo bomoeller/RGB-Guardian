@@ -19,10 +19,11 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 2. **WS2815 LED Strip** - up to 300 LEDs (default active length 288) (or WS2812B with 30 LEDs)
 3. **5 Push Buttons** (for color shooting)
 4. **WIZ-Remote** (optional - for wireless control)
-5. **Power Supply:**
+5. **Optional second ESP32-C3 for Player-2** (secondary wireless controller with 4 illuminated buttons)
+6. **Power Supply:**
    - WS2815 (up to 300 LEDs): 12V external PSU (size current by strip spec)
    - WS2812B (30 LEDs): 5V/2A minimum
-6. **Jumper wires**
+7. **Jumper wires**
 
 ### Physical Connections
 
@@ -55,6 +56,12 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 [Game Buttons] ---- [ESP32 GPIO 0-3] (Red=0, Green=1, Blue=2, White=3, internal pull-up, connect to GND)
 [Button LEDs] ----- [ESP32 GPIO 5-8] (Red=5, Green=6, Blue=7, White=8, OUTPUT)
 ```
+
+**Optional Player-2 controller:**
+- Uses the same button GPIO mapping as Player-1: GPIO0-3
+- Uses the same illuminated button outputs: GPIO5-8
+- Button LEDs are ON while idle and turn OFF while their button is pressed
+- Currently sends only the 4 color shots to the main controller
 
 **[WARNING]** Do not power high LED counts from USB! Use proper external power supply with adequate wire gauge (14-16 AWG for long strips).
 
@@ -146,9 +153,23 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 | Sleep | Toggle between 3-color and 4-color mode |
 | Higher | Increase LED brightness (+10%) |
 | Lower | Decrease LED brightness (-10%) |
-| Off | Cycle Game Mode (1-8) |
+| Off | Cycle Game Mode (1-7) |
 
 **Note:** Physical buttons and remote work simultaneously - use whichever is more comfortable!
+
+### Player-2 Controller (Wireless Secondary Controller)
+
+| Player-2 Button | Action |
+|-----------------|--------|
+| RED | Fire RED shot |
+| GREEN | Fire GREEN shot |
+| BLUE | Fire BLUE shot |
+| WHITE | Fire WHITE shot (4-color mode only) |
+
+**Current status:**
+- Button LEDs use GPIO5-8 and are lit until pressed
+- Player-2 sends the same 4 color-shot packet codes as the WIZ remote
+- Player-2 does not currently send mode, brightness, reset, or settings commands
 
 ### Wired Settings Mode (Physical Buttons)
 
@@ -180,15 +201,14 @@ You can configure gameplay without the remote:
 Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots for 2 seconds before mode starts.
 
 1. **INVERTED** - Button LEDs on when not pressed
-2. **PRESS-TO-LIGHT** - Button LEDs on when pressed
-3. **FOLLOW-ME** - Helper shows next target color
-4. **MEMORY** - Sequence playback, then player input
-5. **GHOST BOSS** - Boss visibility challenge
-6. **DUEL** - 2-player versus from both ends
-7. **CO-PLAY** - 2-player cooperative expanding boss
-8. **ALL-VS-ALL** - 2 players versus each other and the boss
+2. **FOLLOW-ME** - Helper shows next target color
+3. **MEMORY** - Sequence playback, then player input
+4. **GHOST BOSS** - Boss visibility challenge
+5. **DUEL** - 2-player versus from both ends
+6. **CO-PLAY** - 2-player cooperative expanding boss
+7. **ALL-VS-ALL** - 2 players versus each other and the boss
 
-**Mode 8 (ALL-VS-ALL) rules:**
+**Mode 7 (ALL-VS-ALL) rules:**
 - Boss expands from center like CO-PLAY
 - If boss reaches either side, both players lose immediately
 - Same-color shots cancel each other; different-color shots pass through
@@ -259,11 +279,13 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 - Ensure buttons connect GPIO to GND (not to +5V)
 - Check serial monitor for "[DEBUG] Shot fired" messages
 
-### Remote Not Working
-- Check serial monitor shows ESP32 MAC address
-- Press remote buttons and watch for "[ESPNOW] Remote: XX:XX:XX..." messages
-- Ensure remote has fresh batteries
-- Remote works on 2.4GHz WiFi - avoid interference
+### Wireless Remote / Player-2 Not Working
+- Check serial monitor shows the controller ESP32 MAC address and allowed sender MAC slots
+- Press remote or Player-2 buttons and watch for "[ESPNOW] Remote slot ..." messages
+- If a sender is not yet authorized, look for "[ESPNOW] Unknown sender MAC detected: ..."
+- Add the discovered sender MAC to the controller allowlist when needed
+- Ensure remote batteries are fresh and the Player-2 board is powered
+- Wireless control uses 2.4GHz WiFi / ESP-NOW - avoid interference
 
 ### Boss Too Fast/Slow
 - Adjust code configuration (see src/controller.cpp)
@@ -321,16 +343,19 @@ Adjust difficulty in `src/controller.cpp`:
 Connect to serial monitor (115200 baud) to see:
 
 - ESP32-C3 MAC address (for remote pairing)
+- Allowed ESP-NOW sender MAC slots
+- Unknown sender MAC discovery messages for new remotes / Player-2 boards
 - Boss spawn details (segments, colors, speed)
 - Shot firing events (color, position)
 - Collision detection (hits, misses, wrong colors)
 - Life loss events (position, remaining lives)
 - Level progression
-- Remote button presses
+- Remote / Player-2 button presses, including sender slot number
 - Color mode changes
 
 **Useful for:**
 - Verifying remote functionality
+- Identifying Player-2 MAC address before allowlisting it
 - Understanding game mechanics
 - Debugging hardware issues
 - Tracking high score progress

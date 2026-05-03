@@ -132,7 +132,6 @@ uint8_t numColors = 3;  // 3 or 4 color mode (default: 3)
 // Button LED control modes
 enum ButtonLEDMode {
   LED_MODE_INVERTED = 0,    // LEDs on when not pressed, off when pressed
-  LED_MODE_PRESS_TO_LIGHT,  // LEDs off, light up when pressed
   LED_MODE_FOLLOW_ME,       // Light up next button to press (based on boss color)
   LED_MODE_MEMORY,          // Memory sequence mode
   LED_MODE_GHOST_BOSS,      // Ghost boss gameplay mode
@@ -201,13 +200,30 @@ const uint16_t MEMORY_LED_OFF_MS = 180;
 // ============================================
 // ESP-NOW REMOTE CONTROL VARIABLES
 // ============================================
-volatile uint8_t remoteCommand = 0xFF;  // 0xFF = no command
-volatile uint8_t lastRemoteSequence = 0;
 uint8_t ledBrightness = BRIGHTNESS;     // Current brightness (0-255)
 const uint8_t BRIGHTNESS_STEP = 26;     // Brightness adjustment step (10% of 255)
+const uint8_t ALLOWED_REMOTE_SLOT_COUNT = 2;
+const uint8_t REMOTE_COMMAND_QUEUE_SIZE = 8;
 
-// Allowed WiZRemote MAC address (only this remote can control the game)
-const uint8_t ALLOWED_REMOTE_MAC[6] = {0x98, 0x77, 0xD5, 0x98, 0x33, 0x8A};
+// Allowed ESP-NOW sender MAC addresses.
+// Slot 1 is the current remote. Leave empty slots as 00:00:00:00:00:00 until discovered.
+const uint8_t ALLOWED_REMOTE_MACS[ALLOWED_REMOTE_SLOT_COUNT][6] = {
+  {0x98, 0x77, 0xD5, 0x98, 0x33, 0x8A},
+  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+};
+volatile uint8_t remoteCommandQueue[REMOTE_COMMAND_QUEUE_SIZE] = {0};
+volatile uint8_t remoteCommandQueueHead = 0;
+volatile uint8_t remoteCommandQueueTail = 0;
+volatile uint8_t remoteCommandQueueCount = 0;
+volatile bool remoteCommandQueueOverflow = false;
+volatile uint8_t lastRemoteSequenceBySlot[ALLOWED_REMOTE_SLOT_COUNT] = {0, 0};
+volatile bool lastRemoteSequenceValidBySlot[ALLOWED_REMOTE_SLOT_COUNT] = {false, false};
+volatile bool unknownRemoteReportPending = false;
+volatile int unknownRemotePacketLength = 0;
+volatile uint8_t unknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
+uint8_t lastReportedUnknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
+unsigned long lastUnknownRemoteReportAt = 0;
+const uint16_t UNKNOWN_REMOTE_REPORT_SUPPRESS_MS = 1500;
 
 // Ghost Boss mode settings
 bool ghostBossModeEnabled = false;
@@ -296,6 +312,14 @@ void initWiFi();
 void initESPNOW();
 void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
 void processRemoteCommand();
+bool enqueueRemoteCommand(uint8_t command);
+bool dequeueRemoteCommand(uint8_t *command);
+void flushRemoteCommandQueueOverflowReport();
+bool isMacConfigured(const uint8_t *mac);
+int8_t findAllowedRemoteIndex(const uint8_t *mac);
+void queueUnknownRemoteReport(const uint8_t *mac, int len);
+void flushUnknownRemoteReport();
+void printMacToSerial(const uint8_t *mac);
 void updateButtonLEDs();
 int8_t getNextColorToShoot();
 void startMemoryPlaybackSequence();
@@ -419,13 +443,12 @@ void setup() {
   Serial.println("[INFO]   Settings keys: Green=Mode+, Blue=Mode-, White=Toggle 4th color, Red=Save/Exit");
   Serial.println("[INFO] Game Modes:");
   Serial.println("[INFO]   1. INVERTED - LEDs on when not pressed");
-  Serial.println("[INFO]   2. PRESS-TO-LIGHT - LEDs light up when pressed");
-  Serial.println("[INFO]   3. FOLLOW-ME - Next button to press lights up");
-  Serial.println("[INFO]   4. MEMORY - Sequence mode");
-  Serial.println("[INFO]   5. GHOST BOSS - Boss flickers visible/invisible");
-  Serial.println("[INFO]   6. DUEL - 2-player shots from both ends");
-  Serial.println("[INFO]   7. CO-PLAY - 2-player cooperative expanding boss");
-  Serial.println("[INFO]   8. ALL-VS-ALL - 2 players vs expanding boss");
+  Serial.println("[INFO]   2. FOLLOW-ME - Next button to press lights up");
+  Serial.println("[INFO]   3. MEMORY - Sequence mode");
+  Serial.println("[INFO]   4. GHOST BOSS - Boss flickers visible/invisible");
+  Serial.println("[INFO]   5. DUEL - 2-player shots from both ends");
+  Serial.println("[INFO]   6. CO-PLAY - 2-player cooperative expanding boss");
+  Serial.println("[INFO]   7. ALL-VS-ALL - 2 players vs expanding boss");
   Serial.printf("[INFO] Current LED Mode: INVERTED (Mode 1)\n");
   Serial.println("=================================\n");
   
@@ -442,6 +465,8 @@ void setup() {
 // ============================================
 void loop() {
   handleButtons();
+  flushUnknownRemoteReport();
+  flushRemoteCommandQueueOverflowReport();
   processRemoteCommand();  // Handle remote control inputs
   updateModeDotsIndicator();
   updateIdlePauseState();
@@ -1196,6 +1221,131 @@ void playLifeLostAnimation() {
 // ============================================
 // ESP-NOW REMOTE CONTROL FUNCTIONS
 // ============================================
+bool isMacConfigured(const uint8_t *mac) {
+  for (uint8_t i = 0; i < 6; i++) {
+    if (mac[i] != 0x00) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int8_t findAllowedRemoteIndex(const uint8_t *mac) {
+  for (uint8_t slot = 0; slot < ALLOWED_REMOTE_SLOT_COUNT; slot++) {
+    if (!isMacConfigured(ALLOWED_REMOTE_MACS[slot])) {
+      continue;
+    }
+
+    bool matches = true;
+    for (uint8_t i = 0; i < 6; i++) {
+      if (mac[i] != ALLOWED_REMOTE_MACS[slot][i]) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      return slot;
+    }
+  }
+
+  return -1;
+}
+
+void queueUnknownRemoteReport(const uint8_t *mac, int len) {
+  if (unknownRemoteReportPending) {
+    return;
+  }
+
+  for (uint8_t i = 0; i < 6; i++) {
+    unknownRemoteMac[i] = mac[i];
+  }
+  unknownRemotePacketLength = len;
+  unknownRemoteReportPending = true;
+}
+
+void printMacToSerial(const uint8_t *mac) {
+  Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+void flushUnknownRemoteReport() {
+  if (!unknownRemoteReportPending) {
+    return;
+  }
+
+  uint8_t mac[6];
+  int packetLen;
+
+  noInterrupts();
+  for (uint8_t i = 0; i < 6; i++) {
+    mac[i] = unknownRemoteMac[i];
+  }
+  packetLen = unknownRemotePacketLength;
+  unknownRemoteReportPending = false;
+  interrupts();
+
+  bool sameAsLast = true;
+  for (uint8_t i = 0; i < 6; i++) {
+    if (mac[i] != lastReportedUnknownRemoteMac[i]) {
+      sameAsLast = false;
+      break;
+    }
+  }
+
+  unsigned long now = millis();
+  if (sameAsLast && (now - lastUnknownRemoteReportAt) < UNKNOWN_REMOTE_REPORT_SUPPRESS_MS) {
+    return;
+  }
+
+  for (uint8_t i = 0; i < 6; i++) {
+    lastReportedUnknownRemoteMac[i] = mac[i];
+  }
+  lastUnknownRemoteReportAt = now;
+
+  Serial.print("[ESPNOW] Unknown sender MAC detected: ");
+  printMacToSerial(mac);
+  Serial.printf(" (len: %d)\n", packetLen);
+  Serial.println("[ESPNOW] Add this MAC to ALLOWED_REMOTE_MACS in src/controller.cpp to authorize it.");
+}
+
+bool enqueueRemoteCommand(uint8_t command) {
+  if (remoteCommandQueueCount >= REMOTE_COMMAND_QUEUE_SIZE) {
+    remoteCommandQueueOverflow = true;
+    return false;
+  }
+
+  remoteCommandQueue[remoteCommandQueueTail] = command;
+  remoteCommandQueueTail = (remoteCommandQueueTail + 1) % REMOTE_COMMAND_QUEUE_SIZE;
+  remoteCommandQueueCount = remoteCommandQueueCount + 1;
+  return true;
+}
+
+bool dequeueRemoteCommand(uint8_t *command) {
+  noInterrupts();
+  if (remoteCommandQueueCount == 0) {
+    interrupts();
+    return false;
+  }
+
+  *command = remoteCommandQueue[remoteCommandQueueHead];
+  remoteCommandQueueHead = (remoteCommandQueueHead + 1) % REMOTE_COMMAND_QUEUE_SIZE;
+  remoteCommandQueueCount = remoteCommandQueueCount - 1;
+  interrupts();
+  return true;
+}
+
+void flushRemoteCommandQueueOverflowReport() {
+  if (!remoteCommandQueueOverflow) {
+    return;
+  }
+
+  noInterrupts();
+  remoteCommandQueueOverflow = false;
+  interrupts();
+  Serial.println("[ESPNOW] WARNING: Remote command queue overflow; some inputs were dropped.");
+}
+
 void initWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -1211,25 +1361,29 @@ void initESPNOW() {
     return;
   }
   Serial.println("[ESPNOW] ESP-NOW initialized successfully");
+  Serial.println("[ESPNOW] Allowed sender MACs:");
+  for (uint8_t slot = 0; slot < ALLOWED_REMOTE_SLOT_COUNT; slot++) {
+    Serial.printf("[ESPNOW]   Slot %u: ", (unsigned)(slot + 1));
+    if (isMacConfigured(ALLOWED_REMOTE_MACS[slot])) {
+      printMacToSerial(ALLOWED_REMOTE_MACS[slot]);
+      Serial.println();
+    } else {
+      Serial.println("<empty>");
+    }
+  }
   
   // Register receive callback
   esp_now_register_recv_cb(onDataRecv);
   Serial.println("[ESPNOW] Receive callback registered");
-  Serial.println("[ESPNOW] Waiting for remote commands...");
+  Serial.println("[ESPNOW] Waiting for remote commands and unknown sender discovery...");
 }
 
 void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
   // This runs in interrupt context - keep it SHORT!
 
-  // Filter by allowed remote MAC.
-  bool macAllowed = true;
-  for (int i = 0; i < 6; i++) {
-    if (recv_info->src_addr[i] != ALLOWED_REMOTE_MAC[i]) {
-      macAllowed = false;
-      break;
-    }
-  }
-  if (!macAllowed) {
+  int8_t allowedRemoteIndex = findAllowedRemoteIndex(recv_info->src_addr);
+  if (allowedRemoteIndex < 0) {
+    queueUnknownRemoteReport(recv_info->src_addr, len);
     return;
   }
   
@@ -1244,12 +1398,15 @@ void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int l
     uint8_t sequence = data[1];
     uint8_t buttonCode = data[6];
     
-    // Debounce: only process if sequence changed
-    if (sequence != lastRemoteSequence) {
-      lastRemoteSequence = sequence;
-      remoteCommand = buttonCode;
+    // Debounce per sender slot so multiple remotes do not suppress each other.
+    if (!lastRemoteSequenceValidBySlot[allowedRemoteIndex] ||
+        sequence != lastRemoteSequenceBySlot[allowedRemoteIndex]) {
+      lastRemoteSequenceBySlot[allowedRemoteIndex] = sequence;
+      lastRemoteSequenceValidBySlot[allowedRemoteIndex] = true;
+      enqueueRemoteCommand(buttonCode);
       
-      Serial.printf("[ESPNOW] Remote: %s, Seq: %d, Button: 0x%02X\n", macStr, sequence, buttonCode);
+      Serial.printf("[ESPNOW] Remote slot %d: %s, Seq: %d, Button: 0x%02X\n",
+                    allowedRemoteIndex + 1, macStr, sequence, buttonCode);
     }
   } else {
     Serial.printf("[ESPNOW] Unknown packet from %s (length: %d)\n", macStr, len);
@@ -1258,10 +1415,9 @@ void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int l
 
 void processRemoteCommand() {
   // Process pending remote command (runs in main loop, not interrupt)
-  if (remoteCommand == 0xFF) return;  // No command pending
-  
-  uint8_t cmd = remoteCommand;
-  remoteCommand = 0xFF;  // Clear command
+  uint8_t cmd;
+  if (!dequeueRemoteCommand(&cmd)) return;  // No command pending
+
   lastUserActivityAt = millis();
   idlePauseTargetActive = false;
   idlePauseActive = false;
@@ -1404,7 +1560,6 @@ void processRemoteCommand() {
 const char* getButtonLEDModeName(ButtonLEDMode mode) {
   switch (mode) {
     case LED_MODE_INVERTED: return "INVERTED";
-    case LED_MODE_PRESS_TO_LIGHT: return "PRESS-TO-LIGHT";
     case LED_MODE_FOLLOW_ME: return "FOLLOW-ME";
     case LED_MODE_MEMORY: return "MEMORY";
     case LED_MODE_GHOST_BOSS: return "GHOST BOSS";
@@ -2689,18 +2844,6 @@ void updateButtonLEDs() {
       for (int i = 0; i < buttonsToControl; i++) {
         bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
         digitalWrite(btnLEDPins[i], buttonPressed ? LOW : HIGH);
-      }
-      // Turn off unused button LED in 3-color mode
-      if (numColors == 3) {
-        digitalWrite(BTN_LED_WHITE_PIN, LOW);
-      }
-      break;
-      
-    case LED_MODE_PRESS_TO_LIGHT:
-      // LEDs off normally, light up when button is pressed
-      for (int i = 0; i < buttonsToControl; i++) {
-        bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
-        digitalWrite(btnLEDPins[i], buttonPressed ? HIGH : LOW);
       }
       // Turn off unused button LED in 3-color mode
       if (numColors == 3) {

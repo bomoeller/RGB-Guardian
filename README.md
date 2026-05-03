@@ -1,10 +1,18 @@
 # RGB Guardian - ESP32-C3 SuperMini
 
-PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 8 game modes.
+PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 7 game modes.
 
 Firmware layout:
 - Controller: LED controller and Player-1 interface
-- Player-2: Secondary controller sending button presses to the primary controller
+- Player-2: Secondary wireless controller with 4 illuminated buttons sending color-shot presses to the primary controller
+
+Current wireless status:
+- Controller accepts up to 2 allowed ESP-NOW sender MAC addresses.
+- Unknown sender MACs are printed on Serial so new remotes can be discovered and added to the allowlist.
+- Remote packet sequence debouncing is tracked per sender slot, so WIZ remote and Player-2 can operate at the same time.
+- Player-2 currently sends only the 4 color-shot buttons (RED/GREEN/BLUE/WHITE).
+- Player-2 button LEDs use GPIO5-8 and stay lit until the matching button is pressed.
+- Player-2 currently transmits to broadcast during bring-up; you can later replace that with the controller MAC if desired.
 
 ## Current Setup
 
@@ -33,6 +41,10 @@ Outputs:
 - GPIO7: Blue button LED
 - GPIO8: White button LED
 
+Player-2 uses the same button GPIO layout:
+- Inputs: GPIO0-3
+- Button LEDs: GPIO5-8
+
 ## Wiring
 
 ```text
@@ -50,13 +62,12 @@ Important: ESP32 GND and strip power GND must be connected together.
 ## Game Modes (Remote Off cycles)
 
 1. INVERTED
-2. PRESS-TO-LIGHT
-3. FOLLOW-ME
-4. MEMORY
-5. GHOST BOSS
-6. DUEL
-7. CO-PLAY
-8. ALL-VS-ALL
+2. FOLLOW-ME
+3. MEMORY
+4. GHOST BOSS
+5. DUEL
+6. CO-PLAY
+7. ALL-VS-ALL
 
 Mode indicator:
 - Far-end lilac dots show mode number for 2 seconds before mode starts.
@@ -94,6 +105,12 @@ pio device monitor
 PlatformIO environments:
 - `controller` -> `src/controller.cpp`
 - `player-2` -> `src/player-2.cpp`
+
+Current Player-2 behavior:
+- 4 active-low buttons on GPIO0-3
+- 4 illuminated button outputs on GPIO5-8
+- LEDs are on by default and turn off while the matching button is pressed
+- Sends WIZ-compatible 13-byte ESP-NOW packets for color buttons only
 
 Platform note:
 - The project intentionally pins the PlatformIO `espressif32` platform release in `platformio.ini` to keep builds reproducible and avoid toolchain/package drift.

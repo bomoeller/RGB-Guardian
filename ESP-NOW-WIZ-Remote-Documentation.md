@@ -1,260 +1,187 @@
-# ESP-NOW with WIZ-Remote Documentation
+# ESP-NOW Wireless Control Documentation
 
-**Date:** January 25, 2026  
-**Project:** LED Shooting ESP32 System  
-**Purpose:** Reference guide for implementing ESP-NOW receiver with WIZ-remote control
-
----
-
-## Hardware Information
-
-### ESP32 Receiver (LED Controller)
-- **Device:** ESP32 Wroom32 MiniKit v2.0
-- **MAC Address:** A0:A3:B3:26:7D:F4
-
-### WIZ-Remote Sender
-- **MAC Address:** 98:77:D5:83:A4:77
+**Date:** May 3, 2026  
+**Project:** RGB Guardian  
+**Purpose:** Reference guide for the current ESP-NOW controller and Player-2 implementation
 
 ---
 
-## Protocol Specification
+## Current Hardware Roles
 
-### Message Structure
-- **Packet Length:** 13 bytes (fixed)
-- **Protocol:** ESP-NOW (connectionless WiFi communication)
-- **Frequency:** 2.4 GHz WiFi channels
+### Controller Receiver
+- Board: ESP32-C3 SuperMini
+- Firmware: `src/controller.cpp`
+- Role: Main LED game controller and ESP-NOW receiver
+- Serial output shows:
+  - local controller MAC address
+  - configured allowed sender MAC slots
+  - unknown sender MAC discovery messages
+  - accepted packet sender slot numbers
 
-### Byte Layout
-```
-Byte[0]  : Message Type (0x81 = normal, 0x91 = On button)
-Byte[1]  : Sequence Counter (increments with each transmission)
-Byte[2-5]: Unknown/Reserved (always 0x00 0x00 0x00 0x20)
-Byte[6]  : BUTTON IDENTIFIER (key field for command detection)
-Byte[7-8]: Unknown (0x01 0x64)
-Byte[9-12]: CRC/Checksum (varies per message)
-```
+### Supported Senders
+- WIZ-Remote
+- Optional Player-2 ESP32 controller running `src/player-2.cpp`
 
----
-
-## Button Mapping
-
-### Complete Button Map
-
-| Button Name | Byte[6] HEX | Byte[6] DEC | Use Case Example |
-|-------------|-------------|-------------|------------------|
-| **On**      | 0x01        | 1           | Enable system / Start effects |
-| **Off**     | 0x02        | 2           | Disable system / Stop effects |
-| **Sleep**   | 0x03        | 3           | Low power mode / Dim LEDs |
-| **Lower**   | 0x08        | 8           | Decrease brightness / sensitivity |
-| **Higher**  | 0x09        | 9           | Increase brightness / sensitivity |
-| **Button 1** | 0x10       | 16          | Custom effect 1 |
-| **Button 2** | 0x11       | 17          | Custom effect 2 |
-| **Button 3** | 0x12       | 18          | Custom effect 3 |
-| **Button 4** | 0x13       | 19          | Custom effect 4 |
-
-### Additional Notes
-- Buttons send **multiple identical packets** when pressed (8-10 packets per press)
-- Use debouncing logic to prevent multiple triggers
-- Byte[1] sequence counter helps identify unique button presses
+### Current Allowlist Model
+- Controller supports up to 2 allowed sender MAC addresses
+- Unknown sender MACs are printed on Serial and ignored until added to the allowlist
+- Leave unused allowlist slots as `00:00:00:00:00:00`
 
 ---
 
-## Implementation Guide
+## Current Protocol Usage
 
-### Required Libraries
-```cpp
-#include <WiFi.h>
-#include <esp_now.h>
-#include <esp_wifi.h>
-```
+### Packet Structure
+- Packet length: 13 bytes
+- Transport: ESP-NOW
+- Key fields currently used by the controller:
+  - `Byte[1]`: sequence counter
+  - `Byte[6]`: command / button code
 
-### WiFi Initialization
-```cpp
-void initWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  Serial.println("[ESPNOW] WiFi initialized in Station mode");
-  Serial.print("[ESPNOW] MAC Address: ");
-  Serial.println(WiFi.macAddress());
-}
-```
+### Button / Command Mapping
 
-### ESP-NOW Receive Callback
-```cpp
-void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
-  if (len == 13) {
-    uint8_t buttonCode = data[6];  // Extract button identifier
-    
-    // Add debouncing logic here if needed
-    
-    switch(buttonCode) {
-      case 0x01: // On button
-        Serial.println("[CMD] ON");
-        break;
-      case 0x02: // Off button
-        Serial.println("[CMD] OFF");
-        break;
-      case 0x03: // Sleep button
-        Serial.println("[CMD] SLEEP");
-        break;
-      case 0x08: // Lower button
-        Serial.println("[CMD] LOWER");
-        break;
-      case 0x09: // Higher button
-        Serial.println("[CMD] HIGHER");
-        break;
-      case 0x10: // Button 1
-        Serial.println("[CMD] BUTTON 1");
-        break;
-      case 0x11: // Button 2
-        Serial.println("[CMD] BUTTON 2");
-        break;
-      case 0x12: // Button 3
-        Serial.println("[CMD] BUTTON 3");
-        break;
-      case 0x13: // Button 4
-        Serial.println("[CMD] BUTTON 4");
-        break;
-    }
-  }
-}
-```
+| Sender | Supported codes in current firmware | Notes |
+|--------|-------------------------------------|-------|
+| WIZ-Remote | `0x01`, `0x02`, `0x03`, `0x08`, `0x09`, `0x10`, `0x11`, `0x12`, `0x13` | Full remote support |
+| Player-2 | `0x10`, `0x11`, `0x12`, `0x13` | Color shots only |
 
-### Setup Sequence
-```cpp
-void setup() {
-  Serial.begin(115200);
-  
-  // 1. Initialize WiFi
-  initWiFi();
-  
-  // 2. Initialize ESP-NOW
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("[ESPNOW] Error initializing ESP-NOW");
-    return;
-  }
-  Serial.println("[ESPNOW] ESP-NOW initialized successfully");
-  
-  // 3. Register receive callback
-  esp_now_register_recv_cb(onDataRecv);
-  Serial.println("[ESPNOW] Receive callback registered");
-  
-  // Continue with other setup...
-}
-```
+### Color Shot Mapping
+
+| Code | Meaning |
+|------|---------|
+| `0x10` | RED shot |
+| `0x11` | GREEN shot |
+| `0x12` | BLUE shot |
+| `0x13` | WHITE shot |
+
+### System Command Mapping
+
+| Code | Meaning |
+|------|---------|
+| `0x01` | On / reset game |
+| `0x02` | Off / cycle game mode |
+| `0x03` | Sleep / toggle 3-color vs 4-color |
+| `0x08` | Lower brightness |
+| `0x09` | Higher brightness |
 
 ---
 
-## Debouncing Strategy
+## Current Controller Behavior
 
-Since WIZ-remote sends 8-10 packets per button press, implement one of these debouncing methods:
+### MAC Filtering
+- The receive callback checks the sender MAC against the configured allowlist
+- If no slot matches, the packet is ignored
+- Unknown sender MACs are queued and printed from the main loop so they can be copied safely from Serial
 
-### Method 1: Sequence Counter Tracking
-```cpp
-volatile uint8_t lastSequence = 0;
+### Debouncing
+- WIZ-Remote sends repeated packets for one press
+- The controller now tracks the last seen sequence number per sender slot, not globally
+- This allows WIZ-Remote and Player-2 to operate at the same time without suppressing each other
 
-void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
-  if (len == 13) {
-    uint8_t currentSequence = data[1];
-    
-    // Only process if sequence changed
-    if (currentSequence != lastSequence) {
-      lastSequence = currentSequence;
-      uint8_t buttonCode = data[6];
-      // Process button command...
-    }
-  }
-}
-```
-
-### Method 2: Time-Based Debouncing
-```cpp
-unsigned long lastButtonTime = 0;
-const unsigned long DEBOUNCE_MS = 200;
-
-void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
-  unsigned long now = millis();
-  
-  if (now - lastButtonTime > DEBOUNCE_MS) {
-    lastButtonTime = now;
-    uint8_t buttonCode = data[6];
-    // Process button command...
-  }
-}
-```
+### Command Queue
+- Accepted commands are pushed into a small FIFO queue before processing
+- This avoids one sender overwriting another sender's pending command if buttons are pressed close together
+- If the queue overflows, the controller prints a warning on Serial
 
 ---
 
-## Testing Protocol
+## Current Player-2 Behavior
 
-1. Upload firmware with Serial Monitor enabled
-2. Press each button individually
-3. Verify byte[6] values match this documentation
-4. Confirm multiple packets per press (8-10 typical)
-5. Test debouncing effectiveness
+### Transmitter Role
+- Board: ESP32-C3 SuperMini
+- Firmware: `src/player-2.cpp`
+- Sends WIZ-compatible 13-byte packets
+- Uses GPIO0-3 for active-low button inputs
+- Uses GPIO5-8 for illuminated button LEDs
+- Button LEDs are ON when idle and OFF while pressed
+
+### Current Limits
+- Player-2 currently sends only RED / GREEN / BLUE / WHITE shot commands
+- Player-2 does not currently send reset, mode, brightness, or settings commands
+- Player-2 currently transmits to broadcast during bring-up
+- After MAC discovery, it can later be changed to target the controller MAC directly if desired
 
 ---
 
-## Sample Serial Output
+## Serial Output You Should Expect
 
-```
-[INFO] LED Shooting program starting on ESP32 Wroom32 MiniKit v2.0
+### Controller Boot
+```text
 [ESPNOW] WiFi initialized in Station mode
-[ESPNOW] MAC Address: A0:A3:B3:26:7D:F4
+[ESPNOW] ESP32-C3 MAC Address: XX:XX:XX:XX:XX:XX
 [ESPNOW] ESP-NOW initialized successfully
+[ESPNOW] Allowed sender MACs:
+[ESPNOW]   Slot 1: XX:XX:XX:XX:XX:XX
+[ESPNOW]   Slot 2: <empty>
 [ESPNOW] Receive callback registered
-[ESPNOW] Ready to receive data from WIZ-remote
-
-========== ESP-NOW Data Received ==========
-[ESPNOW] From MAC: 98:77:D5:83:A4:77
-[ESPNOW] Data length: 13
-[ESPNOW] Data (HEX): 81 09 00 00 00 20 10 01 64 2B EC 2D 00
-[ESPNOW] Data (DEC): 129 9 0 0 0 32 16 1 100 43 236 45 0
-==========================================
-[CMD] BUTTON 1
 ```
+
+### Unknown Sender Discovery
+```text
+[ESPNOW] Unknown sender MAC detected: XX:XX:XX:XX:XX:XX (len: 13)
+[ESPNOW] Add this MAC to ALLOWED_REMOTE_MACS in src/controller.cpp to authorize it.
+```
+
+### Accepted Packet
+```text
+[ESPNOW] Remote slot 2: XX:XX:XX:XX:XX:XX, Seq: 17, Button: 0x10
+```
+
+### Player-2 Boot
+```text
+[TX] WiFi initialized in Station mode
+[TX] Local MAC: XX:XX:XX:XX:XX:XX
+[TX] ESP-NOW initialized successfully
+[TX] Destination MAC: FF:FF:FF:FF:FF:FF [broadcast]
+[TX] Ready - press GPIO0-3 buttons to send color shots
+```
+
+---
+
+## MAC Discovery Workflow
+
+1. Upload the controller firmware.
+2. Open Serial Monitor at `115200`.
+3. Press a button on the WIZ-Remote or Player-2.
+4. Watch for `Unknown sender MAC detected: ...`.
+5. Copy that MAC into the next free slot in `ALLOWED_REMOTE_MACS` inside `src/controller.cpp`.
+6. Rebuild and upload the controller.
 
 ---
 
 ## Troubleshooting
 
-### No Data Received
-- Verify WiFi is in STA mode (not AP mode)
-- Check MAC addresses match
-- Ensure WIZ-remote is powered and in range
-- Confirm ESP-NOW initialized successfully
+### No Wireless Input Is Accepted
+- Confirm controller Serial shows ESP-NOW initialization success
+- Confirm the sender MAC is in an allowed slot
+- If not, use the discovery workflow above
+- Check that the sender is powered and in range
 
-### Multiple Triggers Per Press
-- Implement debouncing (see strategies above)
-- Check sequence counter is incrementing
-- Add minimum time delay between commands
+### WIZ-Remote Works But Player-2 Does Not
+- Confirm Player-2 Serial shows its local MAC and successful ESP-NOW startup
+- Confirm the controller printed the Player-2 MAC during discovery
+- Confirm the Player-2 MAC was added to the allowlist
+- Confirm you are testing color buttons only; Player-2 does not send system commands yet
 
-### MAC Address Shows 00:00:00:00:00:00
-- WiFi.macAddress() called before WiFi.mode(WIFI_STA)
-- Add delay after WiFi initialization
-- Use esp_wifi_get_mac() as alternative
+### Inputs Seem To Be Missed During Heavy Button Use
+- The controller now uses per-sender sequence tracking and a command queue
+- If you see a queue overflow warning, reduce burst rate or increase queue size in code
 
----
-
-## Future Enhancements
-
-- Add peer registration for bidirectional communication
-- Implement acknowledgment system
-- Create command queue for reliable execution
-- Add RSSI monitoring for range detection
-- Support multiple WIZ-remotes with different MAC addresses
+### MAC Address Shows `00:00:00:00:00:00`
+- Ensure WiFi was put into `WIFI_STA` mode before reading the MAC
+- Add a short delay after WiFi initialization if needed
 
 ---
 
-## References
+## Next Logical Improvements
 
-- **ESP-NOW Documentation:** [Espressif ESP-NOW Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/network/esp_now.html)
-- **Max Payload:** 250 bytes (no encryption), 1470 bytes (encrypted)
-- **Max Paired Devices:** 20 (10 encrypted + 10 unencrypted)
-- **Range:** ~220m (line of sight), ~30-50m (indoor typical)
+- Replace Player-2 broadcast transmission with a fixed controller destination MAC after bring-up
+- Add controller-side configuration for more than 2 sender slots if needed
+- Add optional acknowledgements or delivery status for Player-2
+- Add Player-2 support for reset / mode / brightness commands if you want feature parity with the WIZ-Remote
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** January 25, 2026  
-**Author:** LED Shooting Project Team
+**Document Version:** 2.0  
+**Last Updated:** May 3, 2026
+```

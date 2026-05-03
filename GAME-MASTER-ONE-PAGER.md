@@ -11,9 +11,14 @@
 ### WIZ-Remote
 - 1/2/3/4: Fire Red/Green/Blue/White
 - Sleep: Toggle 3-color <-> 4-color mode
-- Off: Cycle game modes (1-8)
+- Off: Cycle game modes (1-7)
 - On: Restart game from Level 1
 - Higher/Lower: Brightness up/down
+
+### Optional Player-2 controller
+- Same 4 color-shot buttons as Player-1 / remote
+- Button LEDs are ON by default and turn OFF when pressed
+- Currently only sends color shots, not mode or brightness controls
 
 ---
 
@@ -45,15 +50,14 @@ Tip: mode indicator dots always show at the active strip end.
 ## 3) Game Modes (Off button cycles)
 
 1. INVERTED - Button LEDs are ON by default and turn OFF when pressed.
-2. PRESS-TO-LIGHT - Button LEDs light only while a button is pressed.
-3. FOLLOW-ME - Helper lighting shows the next likely correct color.
-4. MEMORY - System plays a sequence first, then players repeat with inputs.
-5. GHOST BOSS - Boss visibility is limited, requiring memory and timing.
-6. DUEL - Two players compete from opposite ends; first to survive/win conditions.
-7. CO-PLAY - Two players cooperate against an expanding shared boss.
-8. ALL-VS-ALL - Two players and boss conflict; shots can also eliminate opponent.
+2. FOLLOW-ME - Helper lighting shows the next likely correct color.
+3. MEMORY - System plays a sequence first, then players repeat with inputs.
+4. GHOST BOSS - Boss visibility is limited, requiring memory and timing.
+5. DUEL - Two players compete from opposite ends; first to survive/win conditions.
+6. CO-PLAY - Two players cooperate against an expanding shared boss.
+7. ALL-VS-ALL - Two players and boss conflict; shots can also eliminate opponent.
 
-Mode 8 quick rule:
+Mode 7 quick rule:
 - Same-color shots cancel each other.
 - Different-color shots pass through.
 - If boss reaches one side, both players lose that round.
@@ -65,6 +69,6 @@ Mode 8 quick rule:
 1. Explain: "Match the front boss color to destroy it."
 2. Start in 3-color mode for beginners.
 3. Let players try 2-3 levels.
-4. Increase challenge: 4-color mode, then mode 5/6/8.
-5. For groups: use mode 7 or 8.
+4. Increase challenge: 4-color mode, then mode 4/5/7.
+5. For groups: use mode 6 or 7.
 6. If confusion: restart with remote On.
