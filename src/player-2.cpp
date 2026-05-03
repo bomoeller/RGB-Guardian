@@ -3,11 +3,12 @@
 #include <esp_now.h>
 
 // ============================================
-// RGB Guardian - Secondary ESP-NOW Transmitter
+// RGB Guardian - Player-2
 // ============================================
 // Hardware: ESP32-C3 with 4 active-low buttons on GPIO0-3.
-// Purpose: Send WIZ-compatible color button packets (0x10-0x13).
-// Note: Receiver-side MAC allowlisting for this transmitter is added later.
+// Purpose: Secondary controller sending button presses to the primary controller.
+// Sends WIZ-compatible color button packets (0x10-0x13).
+// Note: Controller-side MAC allowlisting for this module is added later.
 
 #define BTN1_PIN 0
 #define BTN2_PIN 1
@@ -157,7 +158,7 @@ void setup() {
 
   Serial.println();
   Serial.println("========================================");
-  Serial.println("RGB Guardian Secondary ESP-NOW TX");
+  Serial.println("RGB Guardian Player-2");
   Serial.println("========================================");
 
   setupButtons();

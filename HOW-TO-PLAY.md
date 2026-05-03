@@ -266,7 +266,7 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 - Remote works on 2.4GHz WiFi - avoid interference
 
 ### Boss Too Fast/Slow
-- Adjust code configuration (see src/main.cpp)
+- Adjust code configuration (see src/controller.cpp)
 - 288 LED setup runs 5x faster than 30 LED setup
 - Consider switching LED strip configuration
 
@@ -281,7 +281,7 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 
 ### LED Strip Configuration
 
-Edit `src/main.cpp` lines 8-9 to select your LED strip:
+Edit `src/controller.cpp` lines 11-12 to select your LED strip:
 
 ```cpp
 // Uncomment ONE of these:
@@ -296,7 +296,7 @@ Edit `src/main.cpp` lines 8-9 to select your LED strip:
 
 ### Game Speed Tuning
 
-Adjust difficulty in `src/main.cpp`:
+Adjust difficulty in `src/controller.cpp`:
 
 **WS2815 (up to 300 LEDs, default active 288):**
 ```cpp

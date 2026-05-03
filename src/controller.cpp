@@ -4,6 +4,9 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 
+// RGB Guardian - Controller
+// LED controller and Player-1 interface firmware.
+
 // ============================================
 // HARDWARE CONFIGURATION - SELECT YOUR SETUP
 // ============================================

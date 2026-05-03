@@ -2,6 +2,10 @@
 
 PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 8 game modes.
 
+Firmware layout:
+- Controller: LED controller and Player-1 interface
+- Player-2: Secondary controller sending button presses to the primary controller
+
 ## Current Setup
 
 - Board: ESP32-C3 SuperMini
@@ -80,14 +84,23 @@ LED length adjust sub-mode:
 ## Build and Upload
 
 ```bash
-pio run
-pio run --target upload
+pio run -e controller
+pio run -e controller --target upload
+pio run -e player-2
+pio run -e player-2 --target upload
 pio device monitor
 ```
 
+PlatformIO environments:
+- `controller` -> `src/controller.cpp`
+- `player-2` -> `src/player-2.cpp`
+
+Platform note:
+- The project intentionally pins the PlatformIO `espressif32` platform release in `platformio.ini` to keep builds reproducible and avoid toolchain/package drift.
+
 ## LED Configuration in Code
 
-Edit `src/main.cpp` and select one:
+Edit `src/controller.cpp` and select one:
 
 ```cpp
 // #define LED_SETUP_WS2812B_30
