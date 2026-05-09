@@ -19,7 +19,7 @@
 
 // Configuration for WS2812B with 30 LEDs
 #ifdef LED_SETUP_WS2812B_30
-  #define LED_PIN     10
+  #define LED_PIN     16   // D1 Mini32: GPIO16 (safe general-purpose, RMT-capable)
   #define NUM_LEDS    30
   #define DEFAULT_ACTIVE_LED_COUNT 30
   #define LED_TYPE    WS2812B
@@ -34,7 +34,7 @@
 
 // Configuration for WS2815 with 300 max LEDs (default active length 288)
 #ifdef LED_SETUP_WS2815_288
-  #define LED_PIN     10
+  #define LED_PIN     16   // D1 Mini32: GPIO16 (safe general-purpose, RMT-capable)
   #define NUM_LEDS    300
   #define DEFAULT_ACTIVE_LED_COUNT 288
   #define LED_TYPE    WS2815
@@ -52,18 +52,24 @@
   #error "No LED configuration selected! Uncomment either LED_SETUP_WS2812B_30 or LED_SETUP_WS2815_288"
 #endif
 
-#define BTN1_PIN    0        // Red shot button
-#define BTN2_PIN    1        // Green shot button
-#define BTN3_PIN    2        // Blue shot button
-#define BTN4_PIN    3        // White shot button (4-color mode)
-#define BTN6_PIN    9        // BOOT button (unused in game)
+// D1 Mini32 pin assignments
+// Buttons:     4-in-a-row on left header  D0,D5,D6,D7 = GPIO26,18,19,23
+// Button LEDs: 4-in-a-row on bottom-right IO27,IO25,IO32,IO12
+#define BTN1_PIN    26       // D0 — Red shot button
+#define BTN2_PIN    18       // D5 — Green shot button
+#define BTN3_PIN    19       // D6 — Blue shot button
+#define BTN4_PIN    23       // D7 — White shot button (4-color mode)
+#define BTN6_PIN     0       // IO0 — BOOT button (mode cycle)
 #define NUM_BUTTONS 5
 
-// Button LED pins (for illuminated game buttons)
-#define BTN_LED_RED_PIN    5  // Red button LED
-#define BTN_LED_GREEN_PIN  6  // Green button LED
-#define BTN_LED_BLUE_PIN   7  // Blue button LED
-#define BTN_LED_WHITE_PIN  8  // White button LED (4-color mode)
+// Button LED pins — 4-in-a-row on bottom-right header (OUTPUT, active-LOW)
+#define BTN_LED_RED_PIN    27  // IO27
+#define BTN_LED_GREEN_PIN  25  // IO25
+#define BTN_LED_BLUE_PIN   32  // IO32
+#define BTN_LED_WHITE_PIN  12  // IO12 (output-safe: no ext. pull-up, WROOM flash already strapped)
+
+// Future: Piezo speaker
+#define PIEZO_PIN          17  // D3 — reserved, not yet used
 
 // ============================================
 // GAME CONFIGURATION (Tweak these!)
@@ -229,20 +235,9 @@ bool lastPlayer2SequenceValid = false;
 volatile bool unknownRemoteReportPending = false;
 volatile int unknownRemotePacketLength = 0;
 volatile uint8_t unknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
-volatile bool rawEspNowReportPending = false;
-volatile int rawEspNowPacketLength = 0;
-volatile bool rawEspNowWasBroadcast = false;
-volatile uint8_t rawEspNowChannel = 0;
-volatile uint8_t rawEspNowSrcMac[6] = {0, 0, 0, 0, 0, 0};
-volatile uint8_t rawEspNowPreview[5] = {0, 0, 0, 0, 0};
 uint8_t lastReportedUnknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
 unsigned long lastUnknownRemoteReportAt = 0;
 const uint16_t UNKNOWN_REMOTE_REPORT_SUPPRESS_MS = 1500;
-
-// Diagnostic: reverse-direction ping to Player-2 to test controller→Player-2 RF path
-static const uint8_t PLAYER2_DIAG_MAC[6] = {0xA4, 0xCB, 0x8F, 0x21, 0x66, 0x60};
-static unsigned long lastPingPlayer2At = 0;
-static const uint16_t PING_PLAYER2_INTERVAL_MS = 3000;
 
 // Ghost Boss mode settings
 bool ghostBossModeEnabled = false;
@@ -368,11 +363,8 @@ void processRemoteCommand();
 bool enqueueRemoteCommand(uint8_t command);
 bool dequeueRemoteCommand(uint8_t *command);
 void flushRemoteCommandQueueOverflowReport();
-void queueRawEspNowReport(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
-void flushRawEspNowReport();
 bool handlePlayer2EspNowPacket(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
 bool isMacConfigured(const uint8_t *mac);
-void pingPlayer2();
 int8_t findAllowedRemoteIndex(const uint8_t *mac);
 void queueUnknownRemoteReport(const uint8_t *mac, int len);
 void flushUnknownRemoteReport();
@@ -469,7 +461,7 @@ void setup() {
   }
   
   Serial.println("\n\n=================================");
-  Serial.println("[INFO] RGB Guardian - ESP32-C3 SuperMini");
+  Serial.println("[INFO] RGB Guardian - Wemos D1 Mini32");
   Serial.println("=================================");
   
   // Display active LED configuration
@@ -543,10 +535,8 @@ void setup() {
 // ============================================
 void loop() {
   handleButtons();
-  flushRawEspNowReport();
   flushUnknownRemoteReport();
   flushRemoteCommandQueueOverflowReport();
-  pingPlayer2();
   processRemoteCommand();  // Handle remote control inputs
   updateModeDotsIndicator();
   updateIdlePauseState();
@@ -1355,58 +1345,9 @@ void queueUnknownRemoteReport(const uint8_t *mac, int len) {
   unknownRemoteReportPending = true;
 }
 
-void queueRawEspNowReport(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
-  if (rawEspNowReportPending || recv_info == nullptr) {
-    return;
-  }
-
-  for (uint8_t i = 0; i < 6; i++) {
-    rawEspNowSrcMac[i] = recv_info->src_addr[i];
-  }
-
-  rawEspNowPacketLength = len;
-  rawEspNowWasBroadcast = true;
-  if (recv_info->des_addr != nullptr) {
-    for (uint8_t i = 0; i < 6; i++) {
-      if (recv_info->des_addr[i] != 0xFF) {
-        rawEspNowWasBroadcast = false;
-        break;
-      }
-    }
-  }
-
-  for (uint8_t i = 0; i < 5; i++) {
-    rawEspNowPreview[i] = (data != nullptr && len > i) ? data[i] : 0;
-  }
-
-  {
-    uint8_t ch = 0;
-    wifi_second_chan_t sec = WIFI_SECOND_CHAN_NONE;
-    esp_wifi_get_channel(&ch, &sec);
-    rawEspNowChannel = ch;
-  }
-
-  rawEspNowReportPending = true;
-}
-
 void printMacToSerial(const uint8_t *mac) {
   Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-}
-
-bool waitForStationStart(const char* context) {
-  unsigned long start = millis();
-  while (!WiFi.STA.started() && (millis() - start) < 2000) {
-    delay(10);
-  }
-
-  if (!WiFi.STA.started()) {
-    Serial.printf("[ESPNOW] WARNING: STA interface did not report started during %s\n", context);
-    return false;
-  }
-
-  Serial.printf("[ESPNOW] STA interface started during %s\n", context);
-  return true;
 }
 
 uint8_t getCurrentWiFiChannel() {
@@ -1420,23 +1361,43 @@ uint8_t getCurrentWiFiChannel() {
   return primaryChannel;
 }
 
-bool lockWiFiChannel(const char* context) {
-  if (esp_wifi_set_channel(ESPNOW_FIXED_CHANNEL, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
-    Serial.printf("[ESPNOW] WARNING: Failed to set WiFi channel to %u during %s\n",
-                  (unsigned)ESPNOW_FIXED_CHANNEL, context);
-    return false;
+void initWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  delay(100);
+
+  Serial.println("[ESPNOW] WiFi initialized in Station mode");
+  Serial.print("[ESPNOW] D1 Mini32 MAC Address: ");
+  Serial.println(WiFi.macAddress());
+  Serial.printf("[ESPNOW] ESP-NOW channel: %u\n", (unsigned)ESPNOW_FIXED_CHANNEL);
+}
+
+void initESPNOW() {
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("[ESPNOW] ERROR: Failed to initialize ESP-NOW");
+    return;
   }
 
-  uint8_t currentChannel = getCurrentWiFiChannel();
-  if (currentChannel != ESPNOW_FIXED_CHANNEL) {
-    Serial.printf("[ESPNOW] WARNING: WiFi channel is %u during %s, expected %u\n",
-                  (unsigned)currentChannel, context, (unsigned)ESPNOW_FIXED_CHANNEL);
-    return false;
+  // Set channel AFTER esp_now_init
+  esp_wifi_set_channel(ESPNOW_FIXED_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  Serial.printf("[ESPNOW] ESP-NOW initialized on channel %u\n", (unsigned)getCurrentWiFiChannel());
+
+  Serial.println("[ESPNOW] Allowed sender MACs:");
+  for (uint8_t slot = 0; slot < ALLOWED_REMOTE_SLOT_COUNT; slot++) {
+    Serial.printf("[ESPNOW]   Slot %u: ", (unsigned)(slot + 1));
+    if (isMacConfigured(ALLOWED_REMOTE_MACS[slot])) {
+      printMacToSerial(ALLOWED_REMOTE_MACS[slot]);
+      Serial.println();
+    } else {
+      Serial.println("<empty>");
+    }
   }
 
-  Serial.printf("[ESPNOW] WiFi channel locked to %u during %s\n",
-                (unsigned)currentChannel, context);
-  return true;
+  // Register receive callback
+  esp_now_register_recv_cb(onDataRecv);
+  Serial.println("[ESPNOW] Receive callback registered");
+  Serial.println("[ESPNOW] Waiting for remote commands...");
 }
 
 void flushUnknownRemoteReport() {
@@ -1479,51 +1440,6 @@ void flushUnknownRemoteReport() {
   Serial.println("[ESPNOW] Add this MAC to ALLOWED_REMOTE_MACS in src/controller.cpp to authorize it.");
 }
 
-void flushRawEspNowReport() {
-  if (!rawEspNowReportPending) {
-    return;
-  }
-
-  uint8_t mac[6];
-  uint8_t preview[5];
-  int packetLen;
-  bool wasBroadcast;
-  uint8_t rxChannel;
-
-  noInterrupts();
-  for (uint8_t i = 0; i < 6; i++) {
-    mac[i] = rawEspNowSrcMac[i];
-  }
-  for (uint8_t i = 0; i < 5; i++) {
-    preview[i] = rawEspNowPreview[i];
-  }
-  packetLen = rawEspNowPacketLength;
-  wasBroadcast = rawEspNowWasBroadcast;
-  rxChannel = rawEspNowChannel;
-  rawEspNowReportPending = false;
-  interrupts();
-
-  Serial.print("[ESPNOW] Raw RX from ");
-  printMacToSerial(mac);
-  Serial.printf(" len=%d ch=%u %s preview=%02X %02X %02X %02X %02X\n",
-                packetLen, (unsigned)rxChannel,
-                wasBroadcast ? "[broadcast]" : "[unicast]",
-                preview[0], preview[1], preview[2], preview[3], preview[4]);
-}
-
-void pingPlayer2() {
-  unsigned long now = millis();
-  if (now - lastPingPlayer2At < PING_PLAYER2_INTERVAL_MS) {
-    return;
-  }
-  lastPingPlayer2At = now;
-
-  // 6-byte "PING" payload
-  static const uint8_t pingPayload[6] = {'P', 'I', 'N', 'G', 0x01, 0x00};
-  esp_err_t r = esp_now_send(PLAYER2_DIAG_MAC, pingPayload, sizeof(pingPayload));
-  Serial.printf("[ESPNOW] Ping -> Player-2 (%s)\n", r == ESP_OK ? "queued" : "err");
-}
-
 bool enqueueRemoteCommand(uint8_t command) {
   if (remoteCommandQueueCount >= REMOTE_COMMAND_QUEUE_SIZE) {
     remoteCommandQueueOverflow = true;
@@ -1561,63 +1477,8 @@ void flushRemoteCommandQueueOverflowReport() {
   Serial.println("[ESPNOW] WARNING: Remote command queue overflow; some inputs were dropped.");
 }
 
-void initWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  WiFi.setSleep(false);
-  waitForStationStart("WiFi init");
-
-  lockWiFiChannel("WiFi init");
-
-  delay(100);
-  Serial.println("[ESPNOW] WiFi initialized in Station mode");
-  Serial.print("[ESPNOW] ESP32-C3 MAC Address: ");
-  Serial.println(WiFi.macAddress());
-  Serial.printf("[ESPNOW] Fixed ESP-NOW channel: %u\n", (unsigned)ESPNOW_FIXED_CHANNEL);
-}
-
-void initESPNOW() {
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("[ESPNOW] ERROR: Failed to initialize ESP-NOW");
-    return;
-  }
-  Serial.println("[ESPNOW] ESP-NOW initialized successfully");
-  lockWiFiChannel("ESP-NOW init");
-  Serial.println("[ESPNOW] Allowed sender MACs:");
-  for (uint8_t slot = 0; slot < ALLOWED_REMOTE_SLOT_COUNT; slot++) {
-    Serial.printf("[ESPNOW]   Slot %u: ", (unsigned)(slot + 1));
-    if (isMacConfigured(ALLOWED_REMOTE_MACS[slot])) {
-      printMacToSerial(ALLOWED_REMOTE_MACS[slot]);
-      Serial.println();
-    } else {
-      Serial.println("<empty>");
-    }
-  }
-  
-  // Register receive callback
-  esp_now_register_recv_cb(onDataRecv);
-  Serial.println("[ESPNOW] Receive callback registered");
-
-  // Add Player-2 as a peer so we can send reverse-direction diagnostic pings
-  esp_now_peer_info_t p2peer = {};
-  memcpy(p2peer.peer_addr, PLAYER2_DIAG_MAC, 6);
-  p2peer.channel = 0;
-  p2peer.ifidx = WIFI_IF_STA;
-  p2peer.encrypt = false;
-  if (esp_now_add_peer(&p2peer) == ESP_OK) {
-    Serial.printf("[ESPNOW] Player-2 diagnostic peer added: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  PLAYER2_DIAG_MAC[0], PLAYER2_DIAG_MAC[1], PLAYER2_DIAG_MAC[2],
-                  PLAYER2_DIAG_MAC[3], PLAYER2_DIAG_MAC[4], PLAYER2_DIAG_MAC[5]);
-  } else {
-    Serial.println("[ESPNOW] WARNING: Failed to add Player-2 diagnostic peer");
-  }
-  Serial.println("[ESPNOW] Waiting for remote commands and unknown sender discovery...");
-}
-
 void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
   // This runs in interrupt context - keep it SHORT!
-
-  queueRawEspNowReport(recv_info, data, len);
 
   if (handlePlayer2EspNowPacket(recv_info, data, len)) {
     return;
@@ -1628,30 +1489,26 @@ void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int l
     queueUnknownRemoteReport(recv_info->src_addr, len);
     return;
   }
-  
-  // Log sender MAC address
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-           recv_info->src_addr[0], recv_info->src_addr[1], recv_info->src_addr[2],
-           recv_info->src_addr[3], recv_info->src_addr[4], recv_info->src_addr[5]);
-  
+
   // Check packet length (WIZ-remote sends 13 bytes)
   if (len == 13) {
     uint8_t sequence = data[1];
     uint8_t buttonCode = data[6];
-    
+
     // Debounce per sender slot so multiple remotes do not suppress each other.
     if (!lastRemoteSequenceValidBySlot[allowedRemoteIndex] ||
         sequence != lastRemoteSequenceBySlot[allowedRemoteIndex]) {
       lastRemoteSequenceBySlot[allowedRemoteIndex] = sequence;
       lastRemoteSequenceValidBySlot[allowedRemoteIndex] = true;
       enqueueRemoteCommand(buttonCode);
-      
+
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               recv_info->src_addr[0], recv_info->src_addr[1], recv_info->src_addr[2],
+               recv_info->src_addr[3], recv_info->src_addr[4], recv_info->src_addr[5]);
       Serial.printf("[ESPNOW] Remote slot %d: %s, Seq: %d, Button: 0x%02X\n",
                     allowedRemoteIndex + 1, macStr, sequence, buttonCode);
     }
-  } else {
-    Serial.printf("[ESPNOW] Unknown packet from %s (length: %d)\n", macStr, len);
   }
 }
 
