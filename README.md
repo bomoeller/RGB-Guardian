@@ -1,60 +1,73 @@
-# RGB Guardian - ESP32-C3 SuperMini
+﻿# RGB Guardian - Wemos D1 Mini32
 
-PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 8 game modes.
+PlatformIO project for RGB Guardian with ESP32 (WROOM-32), WIZ-Remote support, illuminated button outputs, and 8 game modes.
 
 Firmware layout:
-- Controller: LED controller and Player-1 interface
-- Player-2: Secondary wireless controller with 4 illuminated buttons sending color-shot presses to the primary controller
+- Controller: LED controller and Player-1 interface (COM25)
+- Player-2: Secondary wireless controller with 4 illuminated buttons sending color-shot presses to the primary controller (COM26)
 
 Current wireless status:
-- Controller accepts up to 2 allowed ESP-NOW sender MAC addresses.
+- Controller accepts up to 2 allowed ESP-NOW sender MAC addresses (WIZ remotes via allowlist).
+- Player-2 is identified by packet magic bytes (`'P','2'`) — no MAC lock needed, easy board swap.
 - Unknown sender MACs are printed on Serial so new remotes can be discovered and added to the allowlist.
 - Remote packet sequence debouncing is tracked per sender slot, so WIZ remote and Player-2 can operate at the same time.
-- Player-2 currently sends only the 4 color-shot buttons (RED/GREEN/BLUE/WHITE).
-- Player-2 button LEDs use GPIO5-8 and stay lit until the matching button is pressed.
-- Player-2 currently transmits to broadcast during bring-up; you can later replace that with the controller MAC if desired.
+- Player-2 sends only the 4 color-shot buttons (RED/GREEN/BLUE/WHITE) via unicast to the hardcoded controller MAC.
 
 ## Current Setup
 
-- Board: ESP32-C3 SuperMini
+- Board: Wemos D1 Mini32 (ESP-WROOM-32, dual-core 240 MHz, 4 MB flash)
+- USB chip: CH9102 — stable COM port, does not re-enumerate during flash
 - Active strip profile: WS2815 (300 max LEDs initialized, default active length 288)
-- LED data pin: GPIO10
-- LED strip power: external 12V power supply
-- ESP32 power: USB (5V)
+- LED data pin: GPIO16
+- LED strip power: external 12 V power supply
+- ESP32 power: USB (5 V)
+- Controller MAC: `84:1F:E8:39:AC:1C` (COM25)
+- Player-2 MAC:   `84:1F:E8:39:D2:48` (COM26)
 
 Optional alternate setup in code:
-- WS2812B (30 LEDs, 5V)
+- WS2812B (30 LEDs, 5 V)
 
-## GPIO Mapping
+## GPIO Mapping — Controller
 
 Inputs (active-low with internal pull-ups):
-- GPIO0: Red button
-- GPIO1: Green button
-- GPIO2: Blue button
-- GPIO3: White button (4-color modes)
-- GPIO9: BOOT button
+- GPIO26 (D0): Red button
+- GPIO18 (D5): Green button
+- GPIO19 (D6): Blue button
+- GPIO23 (D7): White button (4-color modes)
+- GPIO0  (IO0): BOOT button (mode cycle)
 
 Outputs:
-- GPIO10: LED strip data
-- GPIO5: Red button LED
-- GPIO6: Green button LED
-- GPIO7: Blue button LED
-- GPIO8: White button LED
+- GPIO16: LED strip data
+- GPIO27: Red button LED
+- GPIO25: Green button LED
+- GPIO32: Blue button LED
+- GPIO12: White button LED
+- GPIO17: Piezo speaker — reserved, not yet wired
 
-Player-2 uses the same button GPIO layout:
-- Inputs: GPIO0-3
-- Button LEDs: GPIO5-8
+## GPIO Mapping — Player-2
+
+Inputs (active-low with internal pull-ups):
+- GPIO26 (D0): Red button
+- GPIO18 (D5): Green button
+- GPIO19 (D6): Blue button
+- GPIO23 (D7): White button
+
+Outputs (active-LOW, lit when idle, off while button is held):
+- GPIO27: Red button LED
+- GPIO25: Green button LED
+- GPIO32: Blue button LED
+- GPIO12: White button LED
 
 ## Wiring
 
 ```text
-ESP32-C3 SuperMini -> LED strip
-GPIO10             -> DIN (data in)
-GND                -> strip GND
+Wemos D1 Mini32 (controller) -> LED strip
+GPIO16                        -> DIN (data in)
+GND                           -> strip GND
 
 WS2815 power supply (external)
-+12V               -> strip +12V
-GND                -> strip GND
++12V                          -> strip +12V
+GND                           -> strip GND
 
 Important: ESP32 GND and strip power GND must be connected together.
 ```
@@ -100,28 +113,34 @@ pio run -e controller
 pio run -e controller --target upload
 pio run -e player-2
 pio run -e player-2 --target upload
-pio device monitor
+```
+
+Safe flash (avoids Unicode corruption of esptool output on Windows):
+```powershell
+$env:PYTHONIOENCODING="utf-8"; pio run -e controller --target upload > flash_out.txt 2>&1; Get-Content flash_out.txt | Select-String "SUCCESS|FAILED|Hard reset|Error"
 ```
 
 PlatformIO environments:
-- `controller` -> `src/controller.cpp`
-- `player-2` -> `src/player-2.cpp`
+- `controller` -> `src/controller.cpp`  (upload port COM25)
+- `player-2`   -> `src/player-2.cpp`   (upload port COM26)
 
 Current Player-2 behavior:
-- 4 active-low buttons on GPIO0-3
-- 4 illuminated button outputs on GPIO5-8
+- 4 active-low buttons on GPIO26/18/19/23 (D0/D5/D6/D7)
+- 4 illuminated button outputs on GPIO27/25/32/12
 - LEDs are on by default and turn off while the matching button is pressed
-- Sends WIZ-compatible 13-byte ESP-NOW packets for color buttons only
+- Sends unicast ESP-NOW packets to controller MAC `84:1F:E8:39:AC:1C`
 
 Current Pong Duel behavior:
-- First implementation is in `src/controller.cpp`
 - Local Player-1 uses the RED button
 - Local fallback Player-2 uses the WHITE button
 - Wireless Player-2 can use WIZ remote or the Player-2 ESP controller
 - Match format is first to 5 points with a center serve and shrinking hit zones
 
-Platform note:
-- The project intentionally pins the PlatformIO `espressif32` platform release in `platformio.ini` to keep builds reproducible and avoid toolchain/package drift.
+Platform notes:
+- Uses standard `espressif32` platform. Arduino-ESP32 v3.x / IDF5.
+- ESP-NOW broadcast receive is broken in IDF5 — unicast only between controller and Player-2.
+- Power save must be disabled (`esp_wifi_set_ps(WIFI_PS_NONE)`) for reliable ESP-NOW RX.
+- GPIO6-11 are internal flash on ESP-WROOM-32 — never use for GPIO. GPIO16 is safe for FastLED/RMT.
 
 ## LED Configuration in Code
 
@@ -139,7 +158,7 @@ Notes:
 
 ## Power Notes
 
-- WS2815 uses 12V strip power.
-- WS2812B uses 5V strip power.
+- WS2815 uses 12 V strip power.
+- WS2812B uses 5 V strip power.
 - Do not power the LED strip from the ESP32 USB port.
 - Use a PSU and wire gauge sized for your strip length and brightness.

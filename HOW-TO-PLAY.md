@@ -1,7 +1,7 @@
-# RGB Guardian - How to Play
+﻿# RGB Guardian - How to Play
 
-**Version:** 1.2  
-**Date:** March 12, 2026
+**Version:** 1.3
+**Date:** May 9, 2026
 
 ---
 
@@ -15,31 +15,38 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 
 ### Required Components
 
-1. **ESP32-C3 SuperMini** (microcontroller)
-2. **WS2815 LED Strip** - up to 300 LEDs (default active length 288) (or WS2812B with 30 LEDs)
+1. **Wemos D1 Mini32** (ESP-WROOM-32 microcontroller)
+2. **WS2815 LED Strip** — up to 300 LEDs (default active length 288) (or WS2812B with 30 LEDs)
 3. **5 Push Buttons** (for color shooting)
-4. **WIZ-Remote** (optional - for wireless control)
-5. **Optional second ESP32-C3 for Player-2** (secondary wireless controller with 4 illuminated buttons)
+4. **WIZ-Remote** (optional — for wireless control)
+5. **Optional second Wemos D1 Mini32 for Player-2** (secondary wireless controller with 4 illuminated buttons)
 6. **Power Supply:**
-   - WS2815 (up to 300 LEDs): 12V external PSU (size current by strip spec)
-   - WS2812B (30 LEDs): 5V/2A minimum
+   - WS2815 (up to 300 LEDs): 12 V external PSU (size current by strip spec)
+   - WS2812B (30 LEDs): 5 V / 2 A minimum
 7. **Jumper wires**
 
 ### Physical Connections
 
 **LED Strip:**
-- LED Data Pin → ESP32-C3 GPIO10
-- WS2815 +12V → External 12V power supply
+- LED Data Pin → ESP32 GPIO16
+- WS2815 +12V → External 12 V power supply
 - LED GND → Common ground (ESP32 + Power Supply)
 
 **Buttons (active-low with internal pull-ups):**
-- Button 1 (RED) → ESP32-C3 GPIO 0 → GND when pressed
-- Button 2 (GREEN) → ESP32-C3 GPIO 1 → GND when pressed
-- Button 3 (BLUE) → ESP32-C3 GPIO 2 → GND when pressed
-- Button 4 (WHITE) → ESP32-C3 GPIO 3 → GND when pressed
+- Button 1 (RED)   → GPIO26 (D0) → GND when pressed
+- Button 2 (GREEN) → GPIO18 (D5) → GND when pressed
+- Button 3 (BLUE)  → GPIO19 (D6) → GND when pressed
+- Button 4 (WHITE) → GPIO23 (D7) → GND when pressed
+- BOOT button      → GPIO0  (IO0) — mode cycle
+
+**Button LEDs (active-LOW outputs):**
+- Red LED   → GPIO27
+- Green LED → GPIO25
+- Blue LED  → GPIO32
+- White LED → GPIO12
 
 **Power:**
-- ESP32-C3 powered via USB (5V)
+- ESP32 powered via USB (5 V)
 - LED strip powered from external supply
 - **CRITICAL:** Connect all grounds together (ESP32 GND + LED GND + Power Supply GND)
 
@@ -50,18 +57,18 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
                       |
                       +---- [Common GND] ----+---- [LED Strip GND]
                                              |
-[ESP32-C3 USB] -------------------------------+---- [ESP32 GND]
-[ESP32 GPIO10] ----------------------------------- [LED Strip Data]
+[ESP32 USB] ----------------------------------+---- [ESP32 GND]
+[ESP32 GPIO16] ----------------------------------- [LED Strip Data]
 
-[Game Buttons] ---- [ESP32 GPIO 0-3] (Red=0, Green=1, Blue=2, White=3, internal pull-up, connect to GND)
-[Button LEDs] ----- [ESP32 GPIO 5-8] (Red=5, Green=6, Blue=7, White=8, OUTPUT)
+[Game Buttons] ---- [ESP32 GPIO26/18/19/23] (Red=26, Green=18, Blue=19, White=23, active-low pull-up)
+[Button LEDs]  ---- [ESP32 GPIO27/25/32/12] (Red=27, Green=25, Blue=32, White=12, active-LOW output)
 ```
 
 **Optional Player-2 controller:**
-- Uses the same button GPIO mapping as Player-1: GPIO0-3
-- Uses the same illuminated button outputs: GPIO5-8
+- Uses the same button GPIO mapping as Player-1: GPIO26/18/19/23
+- Uses the same illuminated button outputs: GPIO27/25/32/12
 - Button LEDs are ON while idle and turn OFF while their button is pressed
-- Currently sends only the 4 color shots to the main controller
+- Sends unicast ESP-NOW color-shot packets to the controller MAC
 
 **[WARNING]** Do not power high LED counts from USB! Use proper external power supply with adequate wire gauge (14-16 AWG for long strips).
 
@@ -96,7 +103,7 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 1. **Level Start:** Boss spawns with random colored segments
 2. **Identify Colors:** Watch the boss's front segment color
 3. **Fire Matching Shot:** Press the corresponding color button
-4. **Hit Detection:** 
+4. **Hit Detection:**
    - Correct color → Front segment destroyed
    - Wrong color → Boss speeds up by 20%
 5. **Victory:** Destroy all boss segments to advance to next level
@@ -105,8 +112,8 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 ### Difficulty Progression
 
 **Speed Changes:**
-- WS2815 (active length default 288, configurable up to 300): Level 1 = 300ms/step → Level 6+ = 50ms/step
-- WS2812B (30 LEDs): Level 1 = 1500ms/step → Level 6+ = 250ms/step
+- WS2815 (active length default 288, configurable up to 300): Level 1 = 300 ms/step → Level 6+ = 50 ms/step
+- WS2812B (30 LEDs): Level 1 = 1500 ms/step → Level 6+ = 250 ms/step
 
 **Boss Growth:**
 - Level 1: 1 segment
@@ -128,18 +135,18 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 
 | Button | GPIO | Color | Action |
 |--------|------|-------|--------|
-| 1 | 0 | Red | Fire RED shot |
-| 2 | 1 | Green | Fire GREEN shot |
-| 3 | 2 | Blue | Fire BLUE shot |
+| 1 | 26 (D0) | Red   | Fire RED shot |
+| 2 | 18 (D5) | Green | Fire GREEN shot |
+| 3 | 19 (D6) | Blue  | Fire BLUE shot |
 
 ### Physical Buttons (4-Color Mode)
 
 | Button | GPIO | Color | Action |
 |--------|------|-------|--------|
-| 1 | 0 | Red | Fire RED shot |
-| 2 | 1 | Green | Fire GREEN shot |
-| 3 | 2 | Blue | Fire BLUE shot |
-| 4 | 3 | White | Fire WHITE shot |
+| 1 | 26 (D0) | Red   | Fire RED shot |
+| 2 | 18 (D5) | Green | Fire GREEN shot |
+| 3 | 19 (D6) | Blue  | Fire BLUE shot |
+| 4 | 23 (D7) | White | Fire WHITE shot |
 
 ### WIZ-Remote (Wireless)
 
@@ -159,17 +166,18 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 
 ### Player-2 Controller (Wireless Secondary Controller)
 
-| Player-2 Button | Action |
-|-----------------|--------|
-| RED | Fire RED shot |
-| GREEN | Fire GREEN shot |
-| BLUE | Fire BLUE shot |
-| WHITE | Fire WHITE shot (4-color mode only) |
+| Player-2 Button | GPIO | Action |
+|-----------------|------|--------|
+| RED   | 26 (D0) | Fire RED shot |
+| GREEN | 18 (D5) | Fire GREEN shot |
+| BLUE  | 19 (D6) | Fire BLUE shot |
+| WHITE | 23 (D7) | Fire WHITE shot (4-color mode only) |
 
 **Current status:**
-- Button LEDs use GPIO5-8 and are lit until pressed
-- Player-2 sends the same 4 color-shot packet codes as the WIZ remote
+- Button LEDs use GPIO27/25/32/12 and are lit until pressed
+- Player-2 sends unicast ESP-NOW packets to the controller MAC `84:1F:E8:39:AC:1C`
 - Player-2 does not currently send mode, brightness, reset, or settings commands
+- Player-2 is identified by packet magic bytes — no MAC allowlist entry needed
 
 ### Pong Duel Controls
 
@@ -259,12 +267,12 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 - Bright and easily visible
 
 **Win Animation (Boss Defeated):**
-- 500ms sparkle burst (white/gold flashing randomly)
+- 500 ms sparkle burst (white/gold flashing randomly)
 - Auto-advances to next level
 
 **Life Lost Animation:**
-- 400ms full strip red flash
-- 100ms blackout
+- 400 ms full strip red flash
+- 100 ms blackout
 - Boss respawns at far end with 1 segment
 
 **Game Over Animation (All Lives Lost):**
@@ -277,10 +285,10 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 
 1. **Watch the Front:** Only the front-most boss segment matters for color matching
 2. **Don't Spam:** Wrong colors make the boss faster! Take time to identify the correct color
-3. **Plan Ahead:** Boss segments are shown in order - prepare for the next color
+3. **Plan Ahead:** Boss segments are shown in order — prepare for the next color
 4. **Use Both Hands:** Physical buttons + remote allows faster reactions
-5. **Manage Speed:** Each wrong shot increases boss speed by 20% - avoid mistakes at high levels
-6. **4-Color Challenge:** White segments can be hard to see against bright backgrounds - adjust brightness
+5. **Manage Speed:** Each wrong shot increases boss speed by 20% — avoid mistakes at high levels
+6. **4-Color Challenge:** White segments can be hard to see against bright backgrounds — adjust brightness
 
 ---
 
@@ -289,21 +297,22 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 ### LEDs Not Lighting Up
 - Check power supply connections (proper voltage/current)
 - Verify all grounds connected together
-- Confirm LED data pin connected to GPIO10
+- Confirm LED data pin connected to GPIO16
 - Check LED strip type matches code configuration
 
 ### Buttons Not Working
-- Verify buttons wired to correct GPIO pins
+- Verify buttons wired to correct GPIO pins (D0/D5/D6/D7 header on D1 Mini32)
 - Ensure buttons connect GPIO to GND (not to +5V)
 - Check serial monitor for "[DEBUG] Shot fired" messages
 
 ### Wireless Remote / Player-2 Not Working
 - Check serial monitor shows the controller ESP32 MAC address and allowed sender MAC slots
 - Press remote or Player-2 buttons and watch for "[ESPNOW] Remote slot ..." messages
-- If a sender is not yet authorized, look for "[ESPNOW] Unknown sender MAC detected: ..."
-- Add the discovered sender MAC to the controller allowlist when needed
+- If a WIZ remote is not yet authorized, look for "[ESPNOW] Unknown sender MAC detected: ..."
+- Add the discovered remote MAC to the controller allowlist when needed
+- Player-2 is identified by magic bytes — no allowlist entry needed for Player-2
 - Ensure remote batteries are fresh and the Player-2 board is powered
-- Wireless control uses 2.4GHz WiFi / ESP-NOW - avoid interference
+- Wireless control uses 2.4 GHz WiFi / ESP-NOW — avoid interference
 
 ### Boss Too Fast/Slow
 - Adjust code configuration (see src/controller.cpp)
@@ -321,11 +330,11 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 
 ### LED Strip Configuration
 
-Edit `src/controller.cpp` lines 11-12 to select your LED strip:
+Edit `src/controller.cpp` to select your LED strip:
 
 ```cpp
 // Uncomment ONE of these:
-// #define LED_SETUP_WS2812B_30      // 30 LEDs, WS2812B strip
+// #define LED_SETUP_WS2812B_30
 #define LED_SETUP_WS2815_288   // WS2815 profile (300 max initialized, 288 default active)
 ```
 
@@ -360,9 +369,10 @@ Adjust difficulty in `src/controller.cpp`:
 
 Connect to serial monitor (115200 baud) to see:
 
-- ESP32-C3 MAC address (for remote pairing)
-- Allowed ESP-NOW sender MAC slots
-- Unknown sender MAC discovery messages for new remotes / Player-2 boards
+- ESP32 MAC address (for remote pairing / discovery)
+- Allowed ESP-NOW sender MAC slots (WIZ remotes)
+- Unknown sender MAC discovery messages for new remotes
+- Player-2 packets (identified by magic bytes, no allowlist entry needed)
 - Boss spawn details (segments, colors, speed)
 - Shot firing events (color, position)
 - Collision detection (hits, misses, wrong colors)
@@ -373,31 +383,7 @@ Connect to serial monitor (115200 baud) to see:
 
 **Useful for:**
 - Verifying remote functionality
-- Identifying Player-2 MAC address before allowlisting it
+- Identifying a new WIZ remote MAC before allowlisting it
 - Understanding game mechanics
 - Debugging hardware issues
 - Tracking high score progress
-
----
-
-## Safety Warnings
-
-1. **[WARNING]** WS2815 strip uses 12V external power, not 5V
-2. **[WARNING]** Do not power LED strips from ESP32 USB port - can damage board
-3. **[WARNING]** Connect all grounds together (power supply, ESP32, LED strip)
-4. **[WARNING]** GPIO2 is strapping pin - avoid holding Button 3 during ESP32 boot
-5. **[WARNING]** Ensure proper ventilation - LEDs and power supply generate heat
-
----
-
-## Credits
-
-**Game Design:** RGB Guardian  
-**Platform:** ESP32-C3 SuperMini + PlatformIO  
-**LED Library:** FastLED 3.10.3  
-**Wireless:** ESP-NOW protocol  
-**Date Created:** February 2026  
-
----
-
-**Have fun defending against the RGB invasion!**

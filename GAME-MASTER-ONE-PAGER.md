@@ -1,12 +1,12 @@
-# RGB Guardian - Game Master One-Page Guide
+﻿# RGB Guardian - Game Master One-Page Guide
 
 ## 1) Core Controls (What players use)
 
-### Physical buttons
-- Button 1 (GPIO0): Red shot
-- Button 2 (GPIO1): Green shot
-- Button 3 (GPIO2): Blue shot
-- Button 4 (GPIO3): White shot (only in 4-color mode)
+### Physical buttons (Wemos D1 Mini32 — D0/D5/D6/D7 header)
+- Button 1 (GPIO26 / D0): Red shot
+- Button 2 (GPIO18 / D5): Green shot
+- Button 3 (GPIO19 / D6): Blue shot
+- Button 4 (GPIO23 / D7): White shot (only in 4-color mode)
 
 ### WIZ-Remote
 - 1/2/3/4: Fire Red/Green/Blue/White
@@ -15,10 +15,10 @@
 - On: Restart game from Level 1
 - Higher/Lower: Brightness up/down
 
-### Optional Player-2 controller
+### Optional Player-2 controller (Wemos D1 Mini32, COM26)
 - Same 4 color-shot buttons as Player-1 / remote
 - Button LEDs are ON by default and turn OFF when pressed
-- Currently only sends color shots, not mode or brightness controls
+- Sends color shots only — no mode, brightness, or reset commands
 
 ---
 

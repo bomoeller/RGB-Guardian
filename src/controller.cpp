@@ -7,6 +7,13 @@
 #include "player2_espnow_packet.h"
 
 // RGB Guardian - Controller
+// Hardware: Wemos D1 Mini32 (ESP-WROOM-32)
+// Buttons:     4-in-a-row on left header  D0,D5,D6,D7 = GPIO26,18,19,23 (active-low, INPUT_PULLUP)
+// Button LEDs: 4-in-a-row on bottom-right IO27,IO25,IO32,IO12 (active-LOW OUTPUT)
+// LED strip: GPIO16 (RMT-capable, avoids ESP-WROOM-32 reserved flash pins 6-11)
+// BOOT button: GPIO0 (mode cycle)
+// Piezo: GPIO17 (reserved, not yet wired)
+// Platform: espressif32 / Arduino-ESP32 v3.x (IDF5) — broadcast broken, unicast only.
 // LED controller and Player-1 interface firmware.
 
 // ============================================

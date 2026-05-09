@@ -77,7 +77,7 @@ void printStartupSummary() {
   Serial.printf("[TX] Controller MAC: %02X:%02X:%02X:%02X:%02X:%02X [unicast]\n",
                 CONTROLLER_MAC[0], CONTROLLER_MAC[1], CONTROLLER_MAC[2],
                 CONTROLLER_MAC[3], CONTROLLER_MAC[4], CONTROLLER_MAC[5]);
-  Serial.println("[TX] Ready - press GPIO0-3 buttons to send ESP-NOW packets");
+  Serial.println("[TX] Ready - press D0/D5/D6/D7 buttons to send ESP-NOW packets");
 }
 
 void scheduleStartupSummaryRepeats() {
