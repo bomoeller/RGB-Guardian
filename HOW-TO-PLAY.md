@@ -153,7 +153,7 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 | Sleep | Toggle between 3-color and 4-color mode |
 | Higher | Increase LED brightness (+10%) |
 | Lower | Decrease LED brightness (-10%) |
-| Off | Cycle Game Mode (1-7) |
+| Off | Cycle Game Mode (1-8) |
 
 **Note:** Physical buttons and remote work simultaneously - use whichever is more comfortable!
 
@@ -170,6 +170,14 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 - Button LEDs use GPIO5-8 and are lit until pressed
 - Player-2 sends the same 4 color-shot packet codes as the WIZ remote
 - Player-2 does not currently send mode, brightness, reset, or settings commands
+
+### Pong Duel Controls
+
+When **PONG DUEL** mode is active:
+- **Local Player-1:** RED button
+- **Local fallback Player-2:** WHITE button
+- **Wireless Player-2:** any WIZ remote color button or any Player-2 controller color button
+- GREEN and BLUE on the main controller are not used for local pong play
 
 ### Wired Settings Mode (Physical Buttons)
 
@@ -207,12 +215,22 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 5. **DUEL** - 2-player versus from both ends
 6. **CO-PLAY** - 2-player cooperative expanding boss
 7. **ALL-VS-ALL** - 2 players versus each other and the boss
+8. **PONG DUEL** - 2-player timing rally on one strip
 
 **Mode 7 (ALL-VS-ALL) rules:**
 - Boss expands from center like CO-PLAY
 - If boss reaches either side, both players lose immediately
 - Same-color shots cancel each other; different-color shots pass through
 - A shot that reaches the opposite player side can eliminate that player and end the round
+
+**Mode 8 (PONG DUEL) rules:**
+- Ball starts near the center after a short serve countdown
+- Player-1 protects the near end, Player-2 protects the far end
+- Press when the ball is inside your hit zone to return it
+- Each successful return speeds the ball up
+- A miss or mistimed press gives the point to the other player
+- First player to 5 points wins the match
+- Hit zones shrink as each player's score rises
 
 ### 3-color / 4-color toggle
 

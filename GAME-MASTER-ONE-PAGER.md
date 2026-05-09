@@ -11,7 +11,7 @@
 ### WIZ-Remote
 - 1/2/3/4: Fire Red/Green/Blue/White
 - Sleep: Toggle 3-color <-> 4-color mode
-- Off: Cycle game modes (1-7)
+- Off: Cycle game modes (1-8)
 - On: Restart game from Level 1
 - Higher/Lower: Brightness up/down
 
@@ -56,11 +56,18 @@ Tip: mode indicator dots always show at the active strip end.
 5. DUEL - Two players compete from opposite ends; first to survive/win conditions.
 6. CO-PLAY - Two players cooperate against an expanding shared boss.
 7. ALL-VS-ALL - Two players and boss conflict; shots can also eliminate opponent.
+8. PONG DUEL - Two players rally one ball back and forth and race to 5 points.
 
 Mode 7 quick rule:
 - Same-color shots cancel each other.
 - Different-color shots pass through.
 - If boss reaches one side, both players lose that round.
+
+Mode 8 quick rule:
+- Local Player-1 uses RED.
+- Local fallback Player-2 uses WHITE.
+- Wireless Player-2 can use WIZ remote or Player-2 ESP.
+- Hit the ball only when it is in your side zone.
 
 ---
 

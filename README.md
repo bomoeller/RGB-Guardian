@@ -1,6 +1,6 @@
 # RGB Guardian - ESP32-C3 SuperMini
 
-PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 7 game modes.
+PlatformIO project for RGB Guardian with ESP32-C3, WIZ-Remote support, illuminated button outputs, and 8 game modes.
 
 Firmware layout:
 - Controller: LED controller and Player-1 interface
@@ -68,6 +68,7 @@ Important: ESP32 GND and strip power GND must be connected together.
 5. DUEL
 6. CO-PLAY
 7. ALL-VS-ALL
+8. PONG DUEL
 
 Mode indicator:
 - Far-end lilac dots show mode number for 2 seconds before mode starts.
@@ -111,6 +112,13 @@ Current Player-2 behavior:
 - 4 illuminated button outputs on GPIO5-8
 - LEDs are on by default and turn off while the matching button is pressed
 - Sends WIZ-compatible 13-byte ESP-NOW packets for color buttons only
+
+Current Pong Duel behavior:
+- First implementation is in `src/controller.cpp`
+- Local Player-1 uses the RED button
+- Local fallback Player-2 uses the WHITE button
+- Wireless Player-2 can use WIZ remote or the Player-2 ESP controller
+- Match format is first to 5 points with a center serve and shrinking hit zones
 
 Platform note:
 - The project intentionally pins the PlatformIO `espressif32` platform release in `platformio.ini` to keep builds reproducible and avoid toolchain/package drift.

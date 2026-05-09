@@ -4,6 +4,8 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 
+#include "player2_espnow_packet.h"
+
 // RGB Guardian - Controller
 // LED controller and Player-1 interface firmware.
 
@@ -138,6 +140,7 @@ enum ButtonLEDMode {
   LED_MODE_DUEL,            // 2-player duel mode
   LED_MODE_COOP,            // 2-player cooperative boss mode
   LED_MODE_ALL_VS_ALL,      // 2-player all-vs-all (players vs each other and boss)
+  LED_MODE_PONG_DUEL,       // 2-player pong duel on a single LED strip
   LED_MODE_COUNT            // Total number of modes
 };
 
@@ -202,6 +205,7 @@ const uint16_t MEMORY_LED_OFF_MS = 180;
 // ============================================
 uint8_t ledBrightness = BRIGHTNESS;     // Current brightness (0-255)
 const uint8_t BRIGHTNESS_STEP = 26;     // Brightness adjustment step (10% of 255)
+const uint8_t ESPNOW_FIXED_CHANNEL = 1;
 const uint8_t ALLOWED_REMOTE_SLOT_COUNT = 2;
 const uint8_t REMOTE_COMMAND_QUEUE_SIZE = 8;
 
@@ -218,12 +222,27 @@ volatile uint8_t remoteCommandQueueCount = 0;
 volatile bool remoteCommandQueueOverflow = false;
 volatile uint8_t lastRemoteSequenceBySlot[ALLOWED_REMOTE_SLOT_COUNT] = {0, 0};
 volatile bool lastRemoteSequenceValidBySlot[ALLOWED_REMOTE_SLOT_COUNT] = {false, false};
+uint8_t lastPlayer2SenderMac[6] = {0, 0, 0, 0, 0, 0};
+bool lastPlayer2SenderMacValid = false;
+uint8_t lastPlayer2Sequence = 0;
+bool lastPlayer2SequenceValid = false;
 volatile bool unknownRemoteReportPending = false;
 volatile int unknownRemotePacketLength = 0;
 volatile uint8_t unknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
+volatile bool rawEspNowReportPending = false;
+volatile int rawEspNowPacketLength = 0;
+volatile bool rawEspNowWasBroadcast = false;
+volatile uint8_t rawEspNowChannel = 0;
+volatile uint8_t rawEspNowSrcMac[6] = {0, 0, 0, 0, 0, 0};
+volatile uint8_t rawEspNowPreview[5] = {0, 0, 0, 0, 0};
 uint8_t lastReportedUnknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
 unsigned long lastUnknownRemoteReportAt = 0;
 const uint16_t UNKNOWN_REMOTE_REPORT_SUPPRESS_MS = 1500;
+
+// Diagnostic: reverse-direction ping to Player-2 to test controller→Player-2 RF path
+static const uint8_t PLAYER2_DIAG_MAC[6] = {0xA4, 0xCB, 0x8F, 0x21, 0x66, 0x60};
+static unsigned long lastPingPlayer2At = 0;
+static const uint16_t PING_PLAYER2_INTERVAL_MS = 3000;
 
 // Ghost Boss mode settings
 bool ghostBossModeEnabled = false;
@@ -291,6 +310,40 @@ unsigned long allVsAllRoundOverStart = 0;
 bool allVsAllLossAnimationPlayed = false;
 uint8_t allVsAllWinner = 0;  // 0=none, 1=player1, 2=player2
 
+// 2-player pong duel mode state
+enum PongPhase {
+  PONG_PHASE_SERVE_COUNTDOWN,
+  PONG_PHASE_BALL_MOVING,
+  PONG_PHASE_POINT_FLASH,
+  PONG_PHASE_MATCH_OVER
+};
+
+PongPhase pongPhase = PONG_PHASE_SERVE_COUNTDOWN;
+int16_t pongBallPosition = 0;
+int8_t pongBallDirection = 1;
+int8_t pongNextServeDirection = 1;
+uint8_t pongPlayer1Score = 0;
+uint8_t pongPlayer2Score = 0;
+uint8_t pongPointWinner = 0;
+uint8_t pongPointLoser = 0;
+uint8_t pongMatchWinner = 0;
+uint8_t pongHitFlashPlayer = 0;
+unsigned long pongPhaseStart = 0;
+unsigned long pongLastBallMove = 0;
+unsigned long pongHitFlashUntil = 0;
+uint16_t pongBallDelay = 0;
+const uint8_t PONG_WIN_SCORE = 5;
+const uint16_t PONG_SERVE_COUNTDOWN_MS = 3000;
+const uint16_t PONG_HIT_FLASH_MS = 80;
+const uint16_t PONG_POINT_FLASH_MS = 600;
+const uint16_t PONG_MATCH_OVER_MS = 2200;
+const CRGB PONG_PLAYER1_COLOR = CRGB(180, 20, 20);
+const CRGB PONG_PLAYER2_COLOR = CRGB(30, 80, 210);
+const CRGB PONG_BALL_COLOR = CRGB::White;
+const CRGB PONG_SERVE_COLOR = CRGB(255, 200, 40);
+const CRGB PONG_HIT_FLASH_COLOR = CRGB(255, 120, 0);
+const CRGB PONG_MISS_FLASH_COLOR = CRGB(255, 0, 0);
+
 // ============================================
 // FUNCTION DECLARATIONS
 // ============================================
@@ -315,7 +368,11 @@ void processRemoteCommand();
 bool enqueueRemoteCommand(uint8_t command);
 bool dequeueRemoteCommand(uint8_t *command);
 void flushRemoteCommandQueueOverflowReport();
+void queueRawEspNowReport(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
+void flushRawEspNowReport();
+bool handlePlayer2EspNowPacket(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
 bool isMacConfigured(const uint8_t *mac);
+void pingPlayer2();
 int8_t findAllowedRemoteIndex(const uint8_t *mac);
 void queueUnknownRemoteReport(const uint8_t *mac, int len);
 void flushUnknownRemoteReport();
@@ -352,6 +409,26 @@ void resolveAllVsAllShotVsBossCollisions();
 void resolveAllVsAllShotVsShotCollisions();
 void fireAllVsAllShotPlayer1(uint8_t color);
 void fireAllVsAllShotPlayer2(uint8_t color);
+void initPongDuelMode();
+void handlePongHitPlayer1();
+void handlePongHitPlayer2();
+void updatePongDuelGame();
+void renderPongDuelGame();
+void startPongServeCountdown();
+void scorePongPoint(uint8_t winner, const char* reason);
+uint8_t getPongBaseZoneSize();
+uint8_t getPongMinZoneSize();
+uint8_t getPongZoneShrinkPerPoint();
+uint8_t getPongZoneSizeForPlayer(uint8_t player);
+int16_t getPongPlayer1ZoneEnd();
+int16_t getPongPlayer2ZoneStart();
+int16_t getPongBallStepSize();
+uint16_t getPongInitialBallDelay();
+uint16_t getPongMinimumBallDelay();
+uint16_t getPongSpeedupPerReturn();
+uint16_t getPongEarlyHitMaxBonus();
+bool isPongHitWindowForPlayer(uint8_t player);
+uint16_t getPongEarlyHitBonus(uint8_t player);
 void renderSharedWinSparkle(unsigned long elapsed);
 void startModeSelectionIndicator();
 void applySettingsSelectionAndExit();
@@ -449,6 +526,7 @@ void setup() {
   Serial.println("[INFO]   5. DUEL - 2-player shots from both ends");
   Serial.println("[INFO]   6. CO-PLAY - 2-player cooperative expanding boss");
   Serial.println("[INFO]   7. ALL-VS-ALL - 2 players vs expanding boss");
+  Serial.println("[INFO]   8. PONG DUEL - 2-player rally with timing zones");
   Serial.printf("[INFO] Current LED Mode: INVERTED (Mode 1)\n");
   Serial.println("=================================\n");
   
@@ -465,8 +543,10 @@ void setup() {
 // ============================================
 void loop() {
   handleButtons();
+  flushRawEspNowReport();
   flushUnknownRemoteReport();
   flushRemoteCommandQueueOverflowReport();
+  pingPlayer2();
   processRemoteCommand();  // Handle remote control inputs
   updateModeDotsIndicator();
   updateIdlePauseState();
@@ -494,6 +574,11 @@ void loop() {
           updateAllVsAllGame();
         }
         renderAllVsAllGame();
+      } else if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+        if (!modeDotsActive && !settingsModeActive) {
+          updatePongDuelGame();
+        }
+        renderPongDuelGame();
       } else if (buttonLEDMode == LED_MODE_COOP) {
         if (!modeDotsActive && !settingsModeActive) {
           updateCoopGame();
@@ -861,7 +946,13 @@ void handleButtons() {
       }
 
       // Direct mapping: Button 1=0(Red), 2=1(Green), 3=2(Blue), 4=3(White)
-      if (buttonLEDMode == LED_MODE_DUEL) {
+      if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+        if (i == 0) {
+          handlePongHitPlayer1();
+        } else if (i == 3) {
+          handlePongHitPlayer2();
+        }
+      } else if (buttonLEDMode == LED_MODE_DUEL) {
         fireDuelShotPlayer1(i);
       } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
         fireAllVsAllShotPlayer1(i);
@@ -1264,9 +1355,88 @@ void queueUnknownRemoteReport(const uint8_t *mac, int len) {
   unknownRemoteReportPending = true;
 }
 
+void queueRawEspNowReport(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+  if (rawEspNowReportPending || recv_info == nullptr) {
+    return;
+  }
+
+  for (uint8_t i = 0; i < 6; i++) {
+    rawEspNowSrcMac[i] = recv_info->src_addr[i];
+  }
+
+  rawEspNowPacketLength = len;
+  rawEspNowWasBroadcast = true;
+  if (recv_info->des_addr != nullptr) {
+    for (uint8_t i = 0; i < 6; i++) {
+      if (recv_info->des_addr[i] != 0xFF) {
+        rawEspNowWasBroadcast = false;
+        break;
+      }
+    }
+  }
+
+  for (uint8_t i = 0; i < 5; i++) {
+    rawEspNowPreview[i] = (data != nullptr && len > i) ? data[i] : 0;
+  }
+
+  {
+    uint8_t ch = 0;
+    wifi_second_chan_t sec = WIFI_SECOND_CHAN_NONE;
+    esp_wifi_get_channel(&ch, &sec);
+    rawEspNowChannel = ch;
+  }
+
+  rawEspNowReportPending = true;
+}
+
 void printMacToSerial(const uint8_t *mac) {
   Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+bool waitForStationStart(const char* context) {
+  unsigned long start = millis();
+  while (!WiFi.STA.started() && (millis() - start) < 2000) {
+    delay(10);
+  }
+
+  if (!WiFi.STA.started()) {
+    Serial.printf("[ESPNOW] WARNING: STA interface did not report started during %s\n", context);
+    return false;
+  }
+
+  Serial.printf("[ESPNOW] STA interface started during %s\n", context);
+  return true;
+}
+
+uint8_t getCurrentWiFiChannel() {
+  uint8_t primaryChannel = 0;
+  wifi_second_chan_t secondChannel = WIFI_SECOND_CHAN_NONE;
+
+  if (esp_wifi_get_channel(&primaryChannel, &secondChannel) != ESP_OK) {
+    return 0;
+  }
+
+  return primaryChannel;
+}
+
+bool lockWiFiChannel(const char* context) {
+  if (esp_wifi_set_channel(ESPNOW_FIXED_CHANNEL, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+    Serial.printf("[ESPNOW] WARNING: Failed to set WiFi channel to %u during %s\n",
+                  (unsigned)ESPNOW_FIXED_CHANNEL, context);
+    return false;
+  }
+
+  uint8_t currentChannel = getCurrentWiFiChannel();
+  if (currentChannel != ESPNOW_FIXED_CHANNEL) {
+    Serial.printf("[ESPNOW] WARNING: WiFi channel is %u during %s, expected %u\n",
+                  (unsigned)currentChannel, context, (unsigned)ESPNOW_FIXED_CHANNEL);
+    return false;
+  }
+
+  Serial.printf("[ESPNOW] WiFi channel locked to %u during %s\n",
+                (unsigned)currentChannel, context);
+  return true;
 }
 
 void flushUnknownRemoteReport() {
@@ -1309,6 +1479,51 @@ void flushUnknownRemoteReport() {
   Serial.println("[ESPNOW] Add this MAC to ALLOWED_REMOTE_MACS in src/controller.cpp to authorize it.");
 }
 
+void flushRawEspNowReport() {
+  if (!rawEspNowReportPending) {
+    return;
+  }
+
+  uint8_t mac[6];
+  uint8_t preview[5];
+  int packetLen;
+  bool wasBroadcast;
+  uint8_t rxChannel;
+
+  noInterrupts();
+  for (uint8_t i = 0; i < 6; i++) {
+    mac[i] = rawEspNowSrcMac[i];
+  }
+  for (uint8_t i = 0; i < 5; i++) {
+    preview[i] = rawEspNowPreview[i];
+  }
+  packetLen = rawEspNowPacketLength;
+  wasBroadcast = rawEspNowWasBroadcast;
+  rxChannel = rawEspNowChannel;
+  rawEspNowReportPending = false;
+  interrupts();
+
+  Serial.print("[ESPNOW] Raw RX from ");
+  printMacToSerial(mac);
+  Serial.printf(" len=%d ch=%u %s preview=%02X %02X %02X %02X %02X\n",
+                packetLen, (unsigned)rxChannel,
+                wasBroadcast ? "[broadcast]" : "[unicast]",
+                preview[0], preview[1], preview[2], preview[3], preview[4]);
+}
+
+void pingPlayer2() {
+  unsigned long now = millis();
+  if (now - lastPingPlayer2At < PING_PLAYER2_INTERVAL_MS) {
+    return;
+  }
+  lastPingPlayer2At = now;
+
+  // 6-byte "PING" payload
+  static const uint8_t pingPayload[6] = {'P', 'I', 'N', 'G', 0x01, 0x00};
+  esp_err_t r = esp_now_send(PLAYER2_DIAG_MAC, pingPayload, sizeof(pingPayload));
+  Serial.printf("[ESPNOW] Ping -> Player-2 (%s)\n", r == ESP_OK ? "queued" : "err");
+}
+
 bool enqueueRemoteCommand(uint8_t command) {
   if (remoteCommandQueueCount >= REMOTE_COMMAND_QUEUE_SIZE) {
     remoteCommandQueueOverflow = true;
@@ -1349,10 +1564,16 @@ void flushRemoteCommandQueueOverflowReport() {
 void initWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+  WiFi.setSleep(false);
+  waitForStationStart("WiFi init");
+
+  lockWiFiChannel("WiFi init");
+
   delay(100);
   Serial.println("[ESPNOW] WiFi initialized in Station mode");
   Serial.print("[ESPNOW] ESP32-C3 MAC Address: ");
   Serial.println(WiFi.macAddress());
+  Serial.printf("[ESPNOW] Fixed ESP-NOW channel: %u\n", (unsigned)ESPNOW_FIXED_CHANNEL);
 }
 
 void initESPNOW() {
@@ -1361,6 +1582,7 @@ void initESPNOW() {
     return;
   }
   Serial.println("[ESPNOW] ESP-NOW initialized successfully");
+  lockWiFiChannel("ESP-NOW init");
   Serial.println("[ESPNOW] Allowed sender MACs:");
   for (uint8_t slot = 0; slot < ALLOWED_REMOTE_SLOT_COUNT; slot++) {
     Serial.printf("[ESPNOW]   Slot %u: ", (unsigned)(slot + 1));
@@ -1375,11 +1597,31 @@ void initESPNOW() {
   // Register receive callback
   esp_now_register_recv_cb(onDataRecv);
   Serial.println("[ESPNOW] Receive callback registered");
+
+  // Add Player-2 as a peer so we can send reverse-direction diagnostic pings
+  esp_now_peer_info_t p2peer = {};
+  memcpy(p2peer.peer_addr, PLAYER2_DIAG_MAC, 6);
+  p2peer.channel = 0;
+  p2peer.ifidx = WIFI_IF_STA;
+  p2peer.encrypt = false;
+  if (esp_now_add_peer(&p2peer) == ESP_OK) {
+    Serial.printf("[ESPNOW] Player-2 diagnostic peer added: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  PLAYER2_DIAG_MAC[0], PLAYER2_DIAG_MAC[1], PLAYER2_DIAG_MAC[2],
+                  PLAYER2_DIAG_MAC[3], PLAYER2_DIAG_MAC[4], PLAYER2_DIAG_MAC[5]);
+  } else {
+    Serial.println("[ESPNOW] WARNING: Failed to add Player-2 diagnostic peer");
+  }
   Serial.println("[ESPNOW] Waiting for remote commands and unknown sender discovery...");
 }
 
 void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
   // This runs in interrupt context - keep it SHORT!
+
+  queueRawEspNowReport(recv_info, data, len);
+
+  if (handlePlayer2EspNowPacket(recv_info, data, len)) {
+    return;
+  }
 
   int8_t allowedRemoteIndex = findAllowedRemoteIndex(recv_info->src_addr);
   if (allowedRemoteIndex < 0) {
@@ -1413,6 +1655,44 @@ void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int l
   }
 }
 
+bool handlePlayer2EspNowPacket(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+  char macStr[18];
+  bool senderChanged;
+  const Player2EspNowPacket *packet;
+
+  if (!isPlayer2EspNowPacket(data, len)) {
+    return false;
+  }
+
+  packet = reinterpret_cast<const Player2EspNowPacket*>(data);
+  senderChanged = !lastPlayer2SenderMacValid || memcmp(recv_info->src_addr, lastPlayer2SenderMac, 6) != 0;
+
+  if (senderChanged) {
+    memcpy(lastPlayer2SenderMac, recv_info->src_addr, 6);
+    lastPlayer2SenderMacValid = true;
+    lastPlayer2SequenceValid = false;
+  }
+
+  if (lastPlayer2SequenceValid && packet->sequence == lastPlayer2Sequence) {
+    return true;
+  }
+
+  lastPlayer2Sequence = packet->sequence;
+  lastPlayer2SequenceValid = true;
+  enqueueRemoteCommand(packet->buttonCode);
+
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           recv_info->src_addr[0], recv_info->src_addr[1], recv_info->src_addr[2],
+           recv_info->src_addr[3], recv_info->src_addr[4], recv_info->src_addr[5]);
+
+  Serial.printf("[ESPNOW] Player-2 packet: %s, Seq: %u, Button: 0x%02X%s\n",
+                macStr,
+                packet->sequence,
+                packet->buttonCode,
+                senderChanged ? " [new sender]" : "");
+  return true;
+}
+
 void processRemoteCommand() {
   // Process pending remote command (runs in main loop, not interrupt)
   uint8_t cmd;
@@ -1432,7 +1712,9 @@ void processRemoteCommand() {
       case 0x10:  // Button 1 - Fire RED shot
         Serial.println("[REMOTE] Button 1 - Fire RED");
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
-          if (buttonLEDMode == LED_MODE_DUEL) {
+          if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+            handlePongHitPlayer2();
+          } else if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(0);
           } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
             fireAllVsAllShotPlayer2(0);
@@ -1447,7 +1729,9 @@ void processRemoteCommand() {
       case 0x11:  // Button 2 - Fire GREEN shot
         Serial.println("[REMOTE] Button 2 - Fire GREEN");
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
-          if (buttonLEDMode == LED_MODE_DUEL) {
+          if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+            handlePongHitPlayer2();
+          } else if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(1);
           } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
             fireAllVsAllShotPlayer2(1);
@@ -1462,7 +1746,9 @@ void processRemoteCommand() {
       case 0x12:  // Button 3 - Fire BLUE (always)
         Serial.println("[REMOTE] Button 3 - Fire BLUE");
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
-          if (buttonLEDMode == LED_MODE_DUEL) {
+          if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+            handlePongHitPlayer2();
+          } else if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(2);
           } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
             fireAllVsAllShotPlayer2(2);
@@ -1475,7 +1761,12 @@ void processRemoteCommand() {
         break;
         
       case 0x13:  // Button 4 - Fire WHITE (only in 4-color mode)
-        if (numColors == 4) {
+        if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+          Serial.println("[REMOTE] Button 4 - Pong HIT");
+          if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
+            handlePongHitPlayer2();
+          }
+        } else if (numColors == 4) {
           Serial.println("[REMOTE] Button 4 - Fire WHITE");
           if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
             if (buttonLEDMode == LED_MODE_DUEL) {
@@ -1526,7 +1817,7 @@ void processRemoteCommand() {
         
       case 0x01:  // On - Reset game
         Serial.println("[REMOTE] ON - Resetting game");
-        initGame();
+        restartCurrentGameMode();
         break;
         
       case 0x02:  // Off - Cycle button LED mode
@@ -1541,7 +1832,7 @@ void processRemoteCommand() {
     // During animations, allow reset, color mode toggle, and LED mode change
     if (cmd == 0x01) {  // On button
       Serial.println("[REMOTE] ON - Resetting game");
-      initGame();
+      restartCurrentGameMode();
     } else if (cmd == 0x03) {  // Sleep - Toggle color mode
       if (numColors == 3) {
         numColors = 4;
@@ -1566,6 +1857,7 @@ const char* getButtonLEDModeName(ButtonLEDMode mode) {
     case LED_MODE_DUEL: return "DUEL";
     case LED_MODE_COOP: return "CO-PLAY";
     case LED_MODE_ALL_VS_ALL: return "ALL-VS-ALL";
+    case LED_MODE_PONG_DUEL: return "PONG DUEL";
     default: return "UNKNOWN";
   }
 }
@@ -1633,6 +1925,8 @@ void restartCurrentGameMode() {
     initAllVsAllMode();
   } else if (buttonLEDMode == LED_MODE_COOP) {
     initCoopMode();
+  } else if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+    initPongDuelMode();
   } else {
     initGame();
   }
@@ -1664,6 +1958,8 @@ void updateModeDotsIndicator() {
     initAllVsAllMode();
   } else if (buttonLEDMode == LED_MODE_COOP) {
     initCoopMode();
+  } else if (buttonLEDMode == LED_MODE_PONG_DUEL) {
+    initPongDuelMode();
   }
 
   Serial.printf("[INFO] Mode %d active: %s\n", (uint8_t)buttonLEDMode + 1, getButtonLEDModeName(buttonLEDMode));
@@ -2119,6 +2415,449 @@ void renderDuelEndAnimation() {
       int pos = (duelWinner == 1) ? (head - t) : (head + t);
       if (pos >= centerStart && pos <= centerEnd && pos >= 0 && pos < activeLedCount) {
         leds[pos] = (t == 0) ? accentColor : winnerColor;
+      }
+    }
+  }
+}
+
+uint8_t getPongBaseZoneSize() {
+  int16_t suggested = activeLedCount / 6;
+  int16_t maxAllowed = (activeLedCount / 2) - 2;
+
+  if (maxAllowed < 5) {
+    maxAllowed = 5;
+  }
+  if (suggested < 5) {
+    suggested = 5;
+  }
+  if (suggested > maxAllowed) {
+    suggested = maxAllowed;
+  }
+
+  return (uint8_t)suggested;
+}
+
+uint8_t getPongMinZoneSize() {
+  uint8_t baseZoneSize = getPongBaseZoneSize();
+  uint8_t minZoneSize = baseZoneSize / 4;
+
+  if (minZoneSize < 5) {
+    minZoneSize = 5;
+  }
+  if (minZoneSize > baseZoneSize) {
+    minZoneSize = baseZoneSize;
+  }
+
+  return minZoneSize;
+}
+
+uint8_t getPongZoneShrinkPerPoint() {
+  uint8_t baseZoneSize = getPongBaseZoneSize();
+  uint8_t minZoneSize = getPongMinZoneSize();
+  int16_t range = (int16_t)baseZoneSize - (int16_t)minZoneSize;
+
+  if (range <= 0) {
+    return 1;
+  }
+
+  int16_t shrinkPerPoint = range / (PONG_WIN_SCORE - 1);
+  if ((range % (PONG_WIN_SCORE - 1)) != 0) {
+    shrinkPerPoint++;
+  }
+  if (shrinkPerPoint < 1) {
+    shrinkPerPoint = 1;
+  }
+
+  return (uint8_t)shrinkPerPoint;
+}
+
+uint8_t getPongZoneSizeForPlayer(uint8_t player) {
+  uint8_t baseZoneSize = getPongBaseZoneSize();
+  uint8_t minZoneSize = getPongMinZoneSize();
+  uint8_t shrinkPerPoint = getPongZoneShrinkPerPoint();
+  uint8_t playerScore = (player == 1) ? pongPlayer1Score : pongPlayer2Score;
+  int16_t zoneSize = (int16_t)baseZoneSize - ((int16_t)playerScore * shrinkPerPoint);
+
+  if (zoneSize < minZoneSize) {
+    zoneSize = minZoneSize;
+  }
+
+  return (uint8_t)zoneSize;
+}
+
+int16_t getPongPlayer1ZoneEnd() {
+  return (int16_t)getPongZoneSizeForPlayer(1) - 1;
+}
+
+int16_t getPongPlayer2ZoneStart() {
+  return (int16_t)activeLedCount - (int16_t)getPongZoneSizeForPlayer(2);
+}
+
+int16_t getPongBallStepSize() {
+  int16_t stepSize = activeLedCount / 72;
+  if (stepSize < 1) {
+    stepSize = 1;
+  }
+  return stepSize;
+}
+
+uint16_t getPongInitialBallDelay() {
+  int16_t stepSize = getPongBallStepSize();
+  int16_t halfTravelPixels = activeLedCount / 2;
+  int16_t travelTicks = halfTravelPixels / stepSize;
+  int32_t delayMs;
+
+  if (travelTicks < 1) {
+    travelTicks = 1;
+  }
+
+  delayMs = 1600 / travelTicks;
+  if (delayMs < 16) {
+    delayMs = 16;
+  }
+  if (delayMs > 60) {
+    delayMs = 60;
+  }
+
+  return (uint16_t)delayMs;
+}
+
+uint16_t getPongMinimumBallDelay() {
+  uint16_t minimumDelay = getPongInitialBallDelay() / 5;
+  if (minimumDelay < 6) {
+    minimumDelay = 6;
+  }
+  return minimumDelay;
+}
+
+uint16_t getPongSpeedupPerReturn() {
+  uint16_t speedup = getPongInitialBallDelay() / 14;
+  if (speedup < 1) {
+    speedup = 1;
+  }
+  return speedup;
+}
+
+uint16_t getPongEarlyHitMaxBonus() {
+  uint16_t bonus = getPongInitialBallDelay() / 8;
+  if (bonus < 1) {
+    bonus = 1;
+  }
+  return bonus;
+}
+
+bool isPongHitWindowForPlayer(uint8_t player) {
+  if (pongPhase != PONG_PHASE_BALL_MOVING) {
+    return false;
+  }
+
+  if (player == 1) {
+    return (pongBallDirection < 0 && pongBallPosition >= 0 && pongBallPosition <= getPongPlayer1ZoneEnd());
+  }
+
+  return (pongBallDirection > 0 && pongBallPosition >= getPongPlayer2ZoneStart() && pongBallPosition < activeLedCount);
+}
+
+uint16_t getPongEarlyHitBonus(uint8_t player) {
+  uint16_t maxBonus = getPongEarlyHitMaxBonus();
+  uint8_t zoneSize = getPongZoneSizeForPlayer(player);
+  int16_t denominator = (int16_t)zoneSize - 1;
+  int16_t numerator;
+
+  if (denominator <= 0) {
+    return maxBonus;
+  }
+
+  if (player == 1) {
+    numerator = pongBallPosition;
+    if (numerator < 0) {
+      numerator = 0;
+    }
+    if (numerator > denominator) {
+      numerator = denominator;
+    }
+  } else {
+    numerator = (activeLedCount - 1) - pongBallPosition;
+    if (numerator < 0) {
+      numerator = 0;
+    }
+    if (numerator > denominator) {
+      numerator = denominator;
+    }
+  }
+
+  return (uint16_t)(((uint32_t)maxBonus * (uint32_t)numerator) / (uint32_t)denominator);
+}
+
+void startPongServeCountdown() {
+  pongPhase = PONG_PHASE_SERVE_COUNTDOWN;
+  pongPhaseStart = millis();
+  pongBallDirection = pongNextServeDirection;
+  pongBallDelay = getPongInitialBallDelay();
+  pongBallPosition = activeLedCount / 2;
+  if (pongBallPosition >= activeLedCount) {
+    pongBallPosition = activeLedCount - 1;
+  }
+  pongLastBallMove = pongPhaseStart;
+  pongHitFlashPlayer = 0;
+  pongHitFlashUntil = 0;
+
+  Serial.printf("[PONG] Serve countdown started toward %s\n",
+                (pongBallDirection < 0) ? "Player 1" : "Player 2");
+}
+
+void initPongDuelMode() {
+  gameState = STATE_PLAYING;
+  pongPlayer1Score = 0;
+  pongPlayer2Score = 0;
+  pongPointWinner = 0;
+  pongPointLoser = 0;
+  pongMatchWinner = 0;
+  pongNextServeDirection = ((millis() / 100) & 0x01) ? 1 : -1;
+  idlePauseActive = false;
+  idlePauseTargetActive = false;
+  startPongServeCountdown();
+
+  Serial.println("[PONG] PONG DUEL mode started");
+  Serial.println("[PONG] P1: local RED button");
+  Serial.println("[PONG] P2: wireless remote / Player-2, optional local WHITE fallback");
+}
+
+void scorePongPoint(uint8_t winner, const char* reason) {
+  pongPointWinner = winner;
+  pongPointLoser = (winner == 1) ? 2 : 1;
+  pongMatchWinner = 0;
+
+  if (winner == 1) {
+    pongPlayer1Score++;
+    if (pongPlayer1Score >= PONG_WIN_SCORE) {
+      pongMatchWinner = 1;
+    }
+  } else {
+    pongPlayer2Score++;
+    if (pongPlayer2Score >= PONG_WIN_SCORE) {
+      pongMatchWinner = 2;
+    }
+  }
+
+  pongNextServeDirection = (pongPointLoser == 1) ? -1 : 1;
+  pongPhase = PONG_PHASE_POINT_FLASH;
+  pongPhaseStart = millis();
+  pongHitFlashPlayer = 0;
+  pongHitFlashUntil = 0;
+
+  Serial.printf("[PONG] Point for P%d (%s) -> score %d:%d\n",
+                winner,
+                reason,
+                pongPlayer1Score,
+                pongPlayer2Score);
+}
+
+void handlePongHitPlayer1() {
+  uint16_t newDelay;
+
+  lastAnyShotFiredAt = millis();
+
+  if (pongPhase != PONG_PHASE_BALL_MOVING) {
+    return;
+  }
+
+  if (!isPongHitWindowForPlayer(1)) {
+    scorePongPoint(2, "P1 mistimed hit");
+    return;
+  }
+
+  newDelay = getPongSpeedupPerReturn() + getPongEarlyHitBonus(1);
+  if (pongBallDelay > (getPongMinimumBallDelay() + newDelay)) {
+    pongBallDelay -= newDelay;
+  } else {
+    pongBallDelay = getPongMinimumBallDelay();
+  }
+
+  pongBallDirection = 1;
+  pongHitFlashPlayer = 1;
+  pongHitFlashUntil = millis() + PONG_HIT_FLASH_MS;
+  Serial.printf("[PONG] P1 returned ball, delay %d ms\n", pongBallDelay);
+}
+
+void handlePongHitPlayer2() {
+  uint16_t newDelay;
+
+  lastAnyShotFiredAt = millis();
+
+  if (pongPhase != PONG_PHASE_BALL_MOVING) {
+    return;
+  }
+
+  if (!isPongHitWindowForPlayer(2)) {
+    scorePongPoint(1, "P2 mistimed hit");
+    return;
+  }
+
+  newDelay = getPongSpeedupPerReturn() + getPongEarlyHitBonus(2);
+  if (pongBallDelay > (getPongMinimumBallDelay() + newDelay)) {
+    pongBallDelay -= newDelay;
+  } else {
+    pongBallDelay = getPongMinimumBallDelay();
+  }
+
+  pongBallDirection = -1;
+  pongHitFlashPlayer = 2;
+  pongHitFlashUntil = millis() + PONG_HIT_FLASH_MS;
+  Serial.printf("[PONG] P2 returned ball, delay %d ms\n", pongBallDelay);
+}
+
+void updatePongDuelGame() {
+  unsigned long now = millis();
+
+  if (pongHitFlashPlayer != 0 && now >= pongHitFlashUntil) {
+    pongHitFlashPlayer = 0;
+    pongHitFlashUntil = 0;
+  }
+
+  switch (pongPhase) {
+    case PONG_PHASE_SERVE_COUNTDOWN:
+      if (now - pongPhaseStart >= PONG_SERVE_COUNTDOWN_MS) {
+        pongPhase = PONG_PHASE_BALL_MOVING;
+        pongBallPosition = activeLedCount / 2;
+        if (pongBallPosition >= activeLedCount) {
+          pongBallPosition = activeLedCount - 1;
+        }
+        pongLastBallMove = now;
+        pongBallDelay = getPongInitialBallDelay();
+      }
+      return;
+
+    case PONG_PHASE_POINT_FLASH:
+      if (now - pongPhaseStart >= PONG_POINT_FLASH_MS) {
+        if (pongMatchWinner != 0) {
+          pongPhase = PONG_PHASE_MATCH_OVER;
+          pongPhaseStart = now;
+          Serial.printf("[PONG] Player %d wins the match\n", pongMatchWinner);
+        } else {
+          startPongServeCountdown();
+        }
+      }
+      return;
+
+    case PONG_PHASE_MATCH_OVER:
+      if (now - pongPhaseStart >= PONG_MATCH_OVER_MS) {
+        initPongDuelMode();
+      }
+      return;
+
+    case PONG_PHASE_BALL_MOVING:
+      break;
+  }
+
+  if (now - pongLastBallMove < pongBallDelay) {
+    return;
+  }
+
+  pongLastBallMove = now;
+  pongBallPosition += pongBallDirection * getPongBallStepSize();
+
+  if (pongBallPosition < 0) {
+    scorePongPoint(2, "ball escaped left");
+    return;
+  }
+  if (pongBallPosition >= activeLedCount) {
+    scorePongPoint(1, "ball escaped right");
+  }
+}
+
+void renderPongDuelGame() {
+  int16_t leftCenter = (activeLedCount - 1) / 2;
+  int16_t rightCenter = activeLedCount / 2;
+  int16_t player1ZoneEnd = getPongPlayer1ZoneEnd();
+  int16_t player2ZoneStart = getPongPlayer2ZoneStart();
+  unsigned long now = millis();
+  CRGB leftZoneColor = PONG_PLAYER1_COLOR;
+  CRGB rightZoneColor = PONG_PLAYER2_COLOR;
+
+  FastLED.clear();
+
+  leftZoneColor.nscale8_video(96);
+  rightZoneColor.nscale8_video(96);
+
+  if (pongHitFlashPlayer == 1) {
+    leftZoneColor = PONG_HIT_FLASH_COLOR;
+  } else if (pongHitFlashPlayer == 2) {
+    rightZoneColor = PONG_HIT_FLASH_COLOR;
+  }
+
+  if (pongPhase == PONG_PHASE_POINT_FLASH) {
+    unsigned long flashElapsed = now - pongPhaseStart;
+    unsigned long flashCycle = flashElapsed % 200;
+    bool showMissColor = (flashCycle < 120);
+
+    if (showMissColor) {
+      if (pongPointLoser == 1) {
+        leftZoneColor = PONG_MISS_FLASH_COLOR;
+      } else if (pongPointLoser == 2) {
+        rightZoneColor = PONG_MISS_FLASH_COLOR;
+      }
+    }
+  }
+
+  if (pongPhase == PONG_PHASE_MATCH_OVER) {
+    bool flashOn = ((now - pongPhaseStart) % 200) < 120;
+    if (flashOn) {
+      fill_solid(leds, activeLedCount, (pongMatchWinner == 1) ? PONG_PLAYER1_COLOR : PONG_PLAYER2_COLOR);
+    }
+    return;
+  }
+
+  for (int i = 0; i <= player1ZoneEnd && i < activeLedCount; i++) {
+    leds[i] = leftZoneColor;
+  }
+  for (int i = player2ZoneStart; i < activeLedCount; i++) {
+    if (i >= 0) {
+      leds[i] = rightZoneColor;
+    }
+  }
+
+  for (int i = 0; i < pongPlayer1Score; i++) {
+    int16_t index = leftCenter - i;
+    if (index >= 0 && index < activeLedCount) {
+      leds[index] += CRGB(100, 0, 0);
+    }
+  }
+  for (int i = 0; i < pongPlayer2Score; i++) {
+    int16_t index = rightCenter + i;
+    if (index >= 0 && index < activeLedCount) {
+      leds[index] += CRGB(0, 0, 100);
+    }
+  }
+
+  if (pongPhase == PONG_PHASE_SERVE_COUNTDOWN) {
+    bool pulseOn = (((now - pongPhaseStart) / 180) % 2) == 0;
+    if (pulseOn) {
+      if (leftCenter >= 0 && leftCenter < activeLedCount) {
+        leds[leftCenter] = PONG_SERVE_COLOR;
+      }
+      if (rightCenter >= 0 && rightCenter < activeLedCount) {
+        leds[rightCenter] = PONG_SERVE_COLOR;
+      }
+    }
+    return;
+  }
+
+  if (pongPhase == PONG_PHASE_BALL_MOVING && pongBallPosition >= 0 && pongBallPosition < activeLedCount) {
+    leds[pongBallPosition] = PONG_BALL_COLOR;
+
+    for (int trail = 1; trail <= 3; trail++) {
+      int16_t trailPos = pongBallPosition - (pongBallDirection * trail);
+      if (trailPos < 0 || trailPos >= activeLedCount) {
+        continue;
+      }
+
+      if (trail == 1) {
+        leds[trailPos] += CRGB(120, 120, 120);
+      } else if (trail == 2) {
+        leds[trailPos] += CRGB(50, 50, 50);
+      } else {
+        leds[trailPos] += CRGB(20, 20, 20);
       }
     }
   }
@@ -2956,6 +3695,24 @@ void updateButtonLEDs() {
         digitalWrite(BTN_LED_WHITE_PIN, LOW);
       }
       break;
+
+    case LED_MODE_PONG_DUEL: {
+      bool player1Pressed = (digitalRead(BTN1_PIN) == LOW);
+      bool player2Pressed = (digitalRead(BTN4_PIN) == LOW);
+
+      digitalWrite(BTN_LED_GREEN_PIN, LOW);
+      digitalWrite(BTN_LED_BLUE_PIN, LOW);
+
+      if (pongPhase == PONG_PHASE_SERVE_COUNTDOWN) {
+        bool pulseOn = (((millis() - pongPhaseStart) / 180) % 2) == 0;
+        digitalWrite(BTN_LED_RED_PIN, pulseOn ? HIGH : LOW);
+        digitalWrite(BTN_LED_WHITE_PIN, pulseOn ? HIGH : LOW);
+      } else {
+        digitalWrite(BTN_LED_RED_PIN, player1Pressed ? LOW : HIGH);
+        digitalWrite(BTN_LED_WHITE_PIN, player2Pressed ? LOW : HIGH);
+      }
+      break;
+    }
   }
 }
 
