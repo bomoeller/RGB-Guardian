@@ -2,11 +2,11 @@
 
 ## 1) Core Controls (What players use)
 
-### Physical buttons (Wemos D1 Mini32 — D0/D5/D6/D7 header)
-- Button 1 (GPIO26 / D0): Red shot
-- Button 2 (GPIO18 / D5): Green shot
-- Button 3 (GPIO19 / D6): Blue shot
-- Button 4 (GPIO23 / D7): White shot (only in 4-color mode)
+### Physical buttons (Wemos D1 Mini32)
+- Button 1 (GPIO16): Red shot
+- Button 2 (GPIO17): Green shot
+- Button 3 (GPIO21): Blue shot
+- Button 4 (GPIO22): White shot (only in 4-color mode)
 
 ### WIZ-Remote
 - 1/2/3/4: Fire Red/Green/Blue/White

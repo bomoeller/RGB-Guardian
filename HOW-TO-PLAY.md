@@ -28,22 +28,22 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 ### Physical Connections
 
 **LED Strip:**
-- LED Data Pin → ESP32 GPIO16
+- LED Data Pin → ESP32 GPIO33
 - WS2815 +12V → External 12 V power supply
 - LED GND → Common ground (ESP32 + Power Supply)
 
 **Buttons (active-low with internal pull-ups):**
-- Button 1 (RED)   → GPIO26 (D0) → GND when pressed
-- Button 2 (GREEN) → GPIO18 (D5) → GND when pressed
-- Button 3 (BLUE)  → GPIO19 (D6) → GND when pressed
-- Button 4 (WHITE) → GPIO23 (D7) → GND when pressed
+- Button 1 (RED)   → GPIO16 → GND when pressed
+- Button 2 (GREEN) → GPIO17 → GND when pressed
+- Button 3 (BLUE)  → GPIO21 → GND when pressed
+- Button 4 (WHITE) → GPIO22 → GND when pressed
 - BOOT button      → GPIO0  (IO0) — mode cycle
 
 **Button LEDs (active-LOW outputs):**
-- Red LED   → GPIO27
-- Green LED → GPIO25
-- Blue LED  → GPIO32
-- White LED → GPIO12
+- Red LED   → GPIO23
+- Green LED → GPIO19
+- Blue LED  → GPIO18
+- White LED → GPIO26
 
 **Power:**
 - ESP32 powered via USB (5 V)
@@ -58,15 +58,15 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
                       +---- [Common GND] ----+---- [LED Strip GND]
                                              |
 [ESP32 USB] ----------------------------------+---- [ESP32 GND]
-[ESP32 GPIO16] ----------------------------------- [LED Strip Data]
+[ESP32 GPIO33] ----------------------------------- [LED Strip Data]
 
-[Game Buttons] ---- [ESP32 GPIO26/18/19/23] (Red=26, Green=18, Blue=19, White=23, active-low pull-up)
-[Button LEDs]  ---- [ESP32 GPIO27/25/32/12] (Red=27, Green=25, Blue=32, White=12, active-LOW output)
+[Game Buttons] ---- [ESP32 GPIO16/17/21/22] (Red=16, Green=17, Blue=21, White=22, active-low pull-up)
+[Button LEDs]  ---- [ESP32 GPIO23/19/18/26] (Red=23, Green=19, Blue=18, White=26, active-LOW output)
 ```
 
 **Optional Player-2 controller:**
-- Uses the same button GPIO mapping as Player-1: GPIO26/18/19/23
-- Uses the same illuminated button outputs: GPIO27/25/32/12
+- Uses the same button GPIO mapping as Player-1: GPIO16/17/21/22
+- Uses the same illuminated button outputs: GPIO23/19/18/26
 - Button LEDs are ON while idle and turn OFF while their button is pressed
 - Sends unicast ESP-NOW color-shot packets to the controller MAC
 
@@ -135,18 +135,18 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 
 | Button | GPIO | Color | Action |
 |--------|------|-------|--------|
-| 1 | 26 (D0) | Red   | Fire RED shot |
-| 2 | 18 (D5) | Green | Fire GREEN shot |
-| 3 | 19 (D6) | Blue  | Fire BLUE shot |
+| 1 | 16 | Red   | Fire RED shot |
+| 2 | 17 | Green | Fire GREEN shot |
+| 3 | 21 | Blue  | Fire BLUE shot |
 
 ### Physical Buttons (4-Color Mode)
 
 | Button | GPIO | Color | Action |
 |--------|------|-------|--------|
-| 1 | 26 (D0) | Red   | Fire RED shot |
-| 2 | 18 (D5) | Green | Fire GREEN shot |
-| 3 | 19 (D6) | Blue  | Fire BLUE shot |
-| 4 | 23 (D7) | White | Fire WHITE shot |
+| 1 | 16 | Red   | Fire RED shot |
+| 2 | 17 | Green | Fire GREEN shot |
+| 3 | 21 | Blue  | Fire BLUE shot |
+| 4 | 22 | White | Fire WHITE shot |
 
 ### WIZ-Remote (Wireless)
 
@@ -168,13 +168,13 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 
 | Player-2 Button | GPIO | Action |
 |-----------------|------|--------|
-| RED   | 26 (D0) | Fire RED shot |
-| GREEN | 18 (D5) | Fire GREEN shot |
-| BLUE  | 19 (D6) | Fire BLUE shot |
-| WHITE | 23 (D7) | Fire WHITE shot (4-color mode only) |
+| RED   | 16 | Fire RED shot |
+| GREEN | 17 | Fire GREEN shot |
+| BLUE  | 21 | Fire BLUE shot |
+| WHITE | 22 | Fire WHITE shot (4-color mode only) |
 
 **Current status:**
-- Button LEDs use GPIO27/25/32/12 and are lit until pressed
+- Button LEDs use GPIO23/19/18/26 and are lit until pressed
 - Player-2 sends unicast ESP-NOW packets to the controller MAC `84:1F:E8:39:AC:1C`
 - Player-2 does not currently send mode, brightness, reset, or settings commands
 - Player-2 is identified by packet magic bytes — no MAC allowlist entry needed
@@ -297,11 +297,11 @@ Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots f
 ### LEDs Not Lighting Up
 - Check power supply connections (proper voltage/current)
 - Verify all grounds connected together
-- Confirm LED data pin connected to GPIO16
+- Confirm LED data pin connected to GPIO33
 - Check LED strip type matches code configuration
 
 ### Buttons Not Working
-- Verify buttons wired to correct GPIO pins (D0/D5/D6/D7 header on D1 Mini32)
+- Verify buttons wired to correct GPIO pins (GPIO16/17/21/22)
 - Ensure buttons connect GPIO to GND (not to +5V)
 - Check serial monitor for "[DEBUG] Shot fired" messages
 

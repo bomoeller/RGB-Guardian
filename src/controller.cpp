@@ -8,11 +8,11 @@
 
 // RGB Guardian - Controller
 // Hardware: Wemos D1 Mini32 (ESP-WROOM-32)
-// Buttons:     4-in-a-row on left header  D0,D5,D6,D7 = GPIO26,18,19,23 (active-low, INPUT_PULLUP)
-// Button LEDs: 4-in-a-row on bottom-right IO27,IO25,IO32,IO12 (active-LOW OUTPUT)
-// LED strip: GPIO16 (RMT-capable, avoids ESP-WROOM-32 reserved flash pins 6-11)
+// Buttons:     RGBW = GPIO16,17,21,22 (active-low, INPUT_PULLUP)
+// Button LEDs: RGBW = GPIO23,19,18,26 (active-LOW OUTPUT)
+// LED strip: GPIO33 (safe output pin, avoids ESP-WROOM-32 reserved flash pins 6-11)
 // BOOT button: GPIO0 (mode cycle)
-// Piezo: GPIO17 (reserved, not yet wired)
+// Piezo: GPIO27 (reserved, not yet wired)
 // Platform: espressif32 / Arduino-ESP32 v3.x (IDF5) — broadcast broken, unicast only.
 // LED controller and Player-1 interface firmware.
 
@@ -26,7 +26,7 @@
 
 // Configuration for WS2812B with 30 LEDs
 #ifdef LED_SETUP_WS2812B_30
-  #define LED_PIN     16   // D1 Mini32: GPIO16 (safe general-purpose, RMT-capable)
+  #define LED_PIN     33   // D1 Mini32: GPIO33 (safe general-purpose output)
   #define NUM_LEDS    30
   #define DEFAULT_ACTIVE_LED_COUNT 30
   #define LED_TYPE    WS2812B
@@ -41,7 +41,7 @@
 
 // Configuration for WS2815 with 300 max LEDs (default active length 288)
 #ifdef LED_SETUP_WS2815_288
-  #define LED_PIN     16   // D1 Mini32: GPIO16 (safe general-purpose, RMT-capable)
+  #define LED_PIN     33   // D1 Mini32: GPIO33 (safe general-purpose output)
   #define NUM_LEDS    300
   #define DEFAULT_ACTIVE_LED_COUNT 288
   #define LED_TYPE    WS2815
@@ -59,24 +59,24 @@
   #error "No LED configuration selected! Uncomment either LED_SETUP_WS2812B_30 or LED_SETUP_WS2815_288"
 #endif
 
-// D1 Mini32 pin assignments
-// Buttons:     4-in-a-row on left header  D0,D5,D6,D7 = GPIO26,18,19,23
-// Button LEDs: 4-in-a-row on bottom-right IO27,IO25,IO32,IO12
-#define BTN1_PIN    26       // D0 — Red shot button
-#define BTN2_PIN    18       // D5 — Green shot button
-#define BTN3_PIN    19       // D6 — Blue shot button
-#define BTN4_PIN    23       // D7 — White shot button (4-color mode)
+// D1 Mini32 pin assignments (see docs/PIN-ASSIGNMENTS-D1-WISHLIST.md)
+// Buttons RGBW: GPIO16,17,21,22
+// Button LEDs RGBW: GPIO23,19,18,26
+#define BTN1_PIN    16       // Red shot button
+#define BTN2_PIN    17       // Green shot button
+#define BTN3_PIN    21       // Blue shot button
+#define BTN4_PIN    22       // White shot button (4-color mode)
 #define BTN6_PIN     0       // IO0 — BOOT button (mode cycle)
 #define NUM_BUTTONS 5
 
-// Button LED pins — 4-in-a-row on bottom-right header (OUTPUT, active-LOW)
-#define BTN_LED_RED_PIN    27  // IO27
-#define BTN_LED_GREEN_PIN  25  // IO25
-#define BTN_LED_BLUE_PIN   32  // IO32
-#define BTN_LED_WHITE_PIN  12  // IO12 (output-safe: no ext. pull-up, WROOM flash already strapped)
+// Button LED pins (OUTPUT, active-LOW)
+#define BTN_LED_RED_PIN    23  // Red button LED
+#define BTN_LED_GREEN_PIN  19  // Green button LED
+#define BTN_LED_BLUE_PIN   18  // Blue button LED
+#define BTN_LED_WHITE_PIN  26  // White button LED
 
 // Future: Piezo speaker
-#define PIEZO_PIN          17  // D3 — reserved, not yet used
+#define PIEZO_PIN          27  // reserved, not yet used
 
 // ============================================
 // GAME CONFIGURATION (Tweak these!)

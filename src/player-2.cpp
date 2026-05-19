@@ -9,20 +9,20 @@
 // RGB Guardian - Player-2
 // ============================================
 // Hardware: Wemos D1 Mini32 (ESP-WROOM-32)
-// Buttons:     4-in-a-row on left header  D0,D5,D6,D7 = GPIO26,18,19,23 (active-low, INPUT_PULLUP)
-// Button LEDs: 4-in-a-row on bottom-right IO27,IO25,IO32,IO12 (active-LOW OUTPUT)
+// Buttons:     RGBW = GPIO16,17,21,22 (active-low, INPUT_PULLUP)
+// Button LEDs: RGBW = GPIO23,19,18,26 (active-LOW OUTPUT)
 // Purpose: Secondary controller sending button presses to the primary controller.
 // Sends Player-2 ESP-NOW unicast packets (0x10-0x13) to the controller.
 // Platform: espressif32 / Arduino-ESP32 v3.x (IDF5) — broadcast broken, unicast only.
 
-#define BTN1_PIN          26   // D0 — RED button
-#define BTN2_PIN          18   // D5 — GREEN button
-#define BTN3_PIN          19   // D6 — BLUE button
-#define BTN4_PIN          23   // D7 — WHITE button
-#define BTN_LED_RED_PIN   27   // IO27
-#define BTN_LED_GREEN_PIN 25   // IO25
-#define BTN_LED_BLUE_PIN  32   // IO32
-#define BTN_LED_WHITE_PIN 12   // IO12
+#define BTN1_PIN          16   // RED button
+#define BTN2_PIN          17   // GREEN button
+#define BTN3_PIN          21   // BLUE button
+#define BTN4_PIN          22   // WHITE button
+#define BTN_LED_RED_PIN   23   // RED LED
+#define BTN_LED_GREEN_PIN 19   // GREEN LED
+#define BTN_LED_BLUE_PIN  18   // BLUE LED
+#define BTN_LED_WHITE_PIN 26   // WHITE LED
 
 static const uint8_t BUTTON_COUNT = 4;
 static const uint8_t buttonPins[BUTTON_COUNT] = {BTN1_PIN, BTN2_PIN, BTN3_PIN, BTN4_PIN};
@@ -77,7 +77,7 @@ void printStartupSummary() {
   Serial.printf("[TX] Controller MAC: %02X:%02X:%02X:%02X:%02X:%02X [unicast]\n",
                 CONTROLLER_MAC[0], CONTROLLER_MAC[1], CONTROLLER_MAC[2],
                 CONTROLLER_MAC[3], CONTROLLER_MAC[4], CONTROLLER_MAC[5]);
-  Serial.println("[TX] Ready - press D0/D5/D6/D7 buttons to send ESP-NOW packets");
+  Serial.println("[TX] Ready - press GPIO16/17/21/22 buttons to send ESP-NOW packets");
 }
 
 void scheduleStartupSummaryRepeats() {
@@ -214,7 +214,7 @@ void setupButtons() {
     lastDebounceAt[i] = 0;
   }
 
-  Serial.println("[TX] Buttons initialized on GPIO26,18,19,23 (D0,D5,D6,D7)");
+  Serial.println("[TX] Buttons initialized on GPIO16,17,21,22");
 }
 
 void setupButtonLeds() {
@@ -223,7 +223,7 @@ void setupButtonLeds() {
     digitalWrite(buttonLedPins[i], HIGH);
   }
 
-  Serial.println("[TX] Button LEDs initialized on GPIO27,25,32,12");
+  Serial.println("[TX] Button LEDs initialized on GPIO23,19,18,26");
 }
 
 void updateButtonLeds() {

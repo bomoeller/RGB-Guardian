@@ -18,7 +18,7 @@ Current wireless status:
 - Board: Wemos D1 Mini32 (ESP-WROOM-32, dual-core 240 MHz, 4 MB flash)
 - USB chip: CH9102 — stable COM port, does not re-enumerate during flash
 - Active strip profile: WS2815 (300 max LEDs initialized, default active length 288)
-- LED data pin: GPIO16
+- LED data pin: GPIO33
 - LED strip power: external 12 V power supply
 - ESP32 power: USB (5 V)
 - Controller MAC: `84:1F:E8:39:AC:1C` (COM25)
@@ -30,39 +30,39 @@ Optional alternate setup in code:
 ## GPIO Mapping — Controller
 
 Inputs (active-low with internal pull-ups):
-- GPIO26 (D0): Red button
-- GPIO18 (D5): Green button
-- GPIO19 (D6): Blue button
-- GPIO23 (D7): White button (4-color modes)
+- GPIO16: Red button
+- GPIO17: Green button
+- GPIO21: Blue button
+- GPIO22: White button (4-color modes)
 - GPIO0  (IO0): BOOT button (mode cycle)
 
 Outputs:
-- GPIO16: LED strip data
-- GPIO27: Red button LED
-- GPIO25: Green button LED
-- GPIO32: Blue button LED
-- GPIO12: White button LED
-- GPIO17: Piezo speaker — reserved, not yet wired
+- GPIO33: LED strip data
+- GPIO23: Red button LED
+- GPIO19: Green button LED
+- GPIO18: Blue button LED
+- GPIO26: White button LED
+- GPIO27: Piezo speaker — reserved, not yet wired
 
 ## GPIO Mapping — Player-2
 
 Inputs (active-low with internal pull-ups):
-- GPIO26 (D0): Red button
-- GPIO18 (D5): Green button
-- GPIO19 (D6): Blue button
-- GPIO23 (D7): White button
+- GPIO16: Red button
+- GPIO17: Green button
+- GPIO21: Blue button
+- GPIO22: White button
 
 Outputs (active-LOW, lit when idle, off while button is held):
-- GPIO27: Red button LED
-- GPIO25: Green button LED
-- GPIO32: Blue button LED
-- GPIO12: White button LED
+- GPIO23: Red button LED
+- GPIO19: Green button LED
+- GPIO18: Blue button LED
+- GPIO26: White button LED
 
 ## Wiring
 
 ```text
 Wemos D1 Mini32 (controller) -> LED strip
-GPIO16                        -> DIN (data in)
+GPIO33                        -> DIN (data in)
 GND                           -> strip GND
 
 WS2815 power supply (external)
@@ -115,6 +115,20 @@ pio run -e player-2
 pio run -e player-2 --target upload
 ```
 
+Fresh upload workflow (one board at a time):
+1. Connect only controller board (COM25) over USB.
+2. Upload controller:
+	```powershell
+	$env:PYTHONIOENCODING="utf-8"; pio run -e controller --target upload > flash_controller.txt 2>&1; Get-Content flash_controller.txt | Select-String "SUCCESS|FAILED|Hard reset|Error"
+	```
+3. Disconnect controller USB.
+4. Connect only player-2 board (COM26) over USB.
+5. Upload player-2:
+	```powershell
+	$env:PYTHONIOENCODING="utf-8"; pio run -e player-2 --target upload > flash_player2.txt 2>&1; Get-Content flash_player2.txt | Select-String "SUCCESS|FAILED|Hard reset|Error"
+	```
+6. Reconnect both boards after flashing and start monitors.
+
 Safe flash (avoids Unicode corruption of esptool output on Windows):
 ```powershell
 $env:PYTHONIOENCODING="utf-8"; pio run -e controller --target upload > flash_out.txt 2>&1; Get-Content flash_out.txt | Select-String "SUCCESS|FAILED|Hard reset|Error"
@@ -125,8 +139,8 @@ PlatformIO environments:
 - `player-2`   -> `src/player-2.cpp`   (upload port COM26)
 
 Current Player-2 behavior:
-- 4 active-low buttons on GPIO26/18/19/23 (D0/D5/D6/D7)
-- 4 illuminated button outputs on GPIO27/25/32/12
+- 4 active-low buttons on GPIO16/17/21/22
+- 4 illuminated button outputs on GPIO23/19/18/26
 - LEDs are on by default and turn off while the matching button is pressed
 - Sends unicast ESP-NOW packets to controller MAC `84:1F:E8:39:AC:1C`
 
@@ -140,7 +154,7 @@ Platform notes:
 - Uses standard `espressif32` platform. Arduino-ESP32 v3.x / IDF5.
 - ESP-NOW broadcast receive is broken in IDF5 — unicast only between controller and Player-2.
 - Power save must be disabled (`esp_wifi_set_ps(WIFI_PS_NONE)`) for reliable ESP-NOW RX.
-- GPIO6-11 are internal flash on ESP-WROOM-32 — never use for GPIO. GPIO16 is safe for FastLED/RMT.
+- GPIO6-11 are internal flash on ESP-WROOM-32 — never use for GPIO. GPIO33 is used for LED strip data in this wiring.
 
 ## LED Configuration in Code
 

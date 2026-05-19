@@ -133,8 +133,8 @@ void onEspNowSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 - COM port: COM26
 - MAC: `84:1F:E8:39:D2:48`
 - Sends 5-byte Player-2 ESP-NOW packets (unicast)
-- Uses GPIO26/18/19/23 (D0/D5/D6/D7) for active-low button inputs
-- Uses GPIO27/25/32/12 for illuminated button LEDs
+- Uses GPIO16/17/21/22 for active-low button inputs
+- Uses GPIO23/19/18/26 for illuminated button LEDs
 - Button LEDs are ON when idle and OFF while pressed
 
 ### Current Limits
@@ -178,7 +178,7 @@ void onEspNowSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 [TX] Local MAC: 84:1F:E8:39:D2:48
 [TX] ESP-NOW initialized successfully
 [TX] Destination MAC (unicast): 84:1F:E8:39:AC:1C
-[TX] Ready - press D0/D5/D6/D7 buttons to send color shots
+[TX] Ready - press GPIO16/17/21/22 buttons to send color shots
 ```
 
 ### Player-2 Successful Send
@@ -231,7 +231,7 @@ Note: Player-2 does NOT require this workflow — it is auto-accepted by magic b
 - **Send callback signature:** `(const uint8_t* mac_addr, esp_now_send_status_t status)` — `esp_now_send_info_t*` does not exist in IDF5
 - **Channel must be set AFTER `esp_now_init()`:** calling `esp_wifi_set_channel()` before init is silently ignored
 - **Power save must be off:** `esp_wifi_set_ps(WIFI_PS_NONE)` required before ESP-NOW init
-- **GPIO6-11 reserved on ESP-WROOM-32:** internal flash — never use for GPIO; GPIO16 is safe for FastLED/RMT
+- **GPIO6-11 reserved on ESP-WROOM-32:** internal flash — never use for GPIO; GPIO33 is used for LED strip data in this project
 
 ---
 
@@ -251,7 +251,7 @@ Note: Player-2 does NOT require this workflow — it is auto-accepted by magic b
 - Add Player-2 support for reset / mode / brightness commands for feature parity with WIZ-Remote
 - Add controller-side configuration for more than 2 WIZ-remote sender slots if needed
 - Add optional delivery acknowledgements for Player-2
-- Implement piezo speaker feedback on GPIO17 (defined but not yet wired)
+- Implement piezo speaker feedback on GPIO27 (defined but not yet wired)
 
 ---
 
