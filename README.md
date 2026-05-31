@@ -170,12 +170,12 @@ Edit `src/controller.cpp` and select one:
 
 ```cpp
 // #define LED_SETUP_WS2812B_30
-#define LED_SETUP_WS2815_288   // WS2815 profile: 300 max LEDs, default active length 288
+#define LED_SETUP_WS2815_288   // WS2815 profile: 300 max LEDs, default active length 300
 ```
 
 Notes:
 - WS2815 profile initializes up to 300 LEDs (`NUM_LEDS`)
-- Default gameplay uses 288 active LEDs (`DEFAULT_ACTIVE_LED_COUNT`)
+- Default gameplay uses 300 active LEDs (`DEFAULT_ACTIVE_LED_COUNT`)
 - Active LED length is adjustable in wired settings mode
 
 ## Power Notes

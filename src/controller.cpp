@@ -22,7 +22,7 @@
 
 // Uncomment ONE of these to select your LED strip configuration:
 // #define LED_SETUP_WS2812B_30      // 30 LEDs, WS2812B strip
-#define LED_SETUP_WS2815_288   // WS2815 profile: 300 max LEDs, default active length 288
+#define LED_SETUP_WS2815_288   // WS2815 profile: 300 max LEDs, default active length 300
 
 // Configuration for WS2812B with 30 LEDs
 #ifdef LED_SETUP_WS2812B_30
@@ -39,15 +39,15 @@
   #define SHOT_SPEED 50            // milliseconds between shot movements
 #endif
 
-// Configuration for WS2815 with 300 max LEDs (default active length 288)
+// Configuration for WS2815 with 300 max LEDs (default active length 300)
 #ifdef LED_SETUP_WS2815_288
   #define LED_PIN     33   // D1 Mini32: GPIO33 (safe general-purpose output)
   #define NUM_LEDS    300
-  #define DEFAULT_ACTIVE_LED_COUNT 288
+  #define DEFAULT_ACTIVE_LED_COUNT 300
   #define LED_TYPE    WS2815
   #define COLOR_ORDER RGB        // R and G swapped compared to WS2812B
   #define BOSS_START_POS 299     // Last LED position
-  // Speed settings optimized for long WS2815 strips (default active length 288)
+  // Speed settings optimized for long WS2815 strips (default active length 300)
   #define BOSS_INITIAL_SPEED 300   // milliseconds per step (Level 1)
   #define BOSS_SPEED_DECREASE 30   // Speed increase per level (ms faster)
   #define BOSS_MIN_SPEED 50        // Fastest possible boss speed
@@ -2827,8 +2827,8 @@ void renderPongDuelGame() {
 
   FastLED.clear();
 
-  leftZoneColor.nscale8_video(96);
-  rightZoneColor.nscale8_video(96);
+  leftZoneColor.nscale8_video(56);
+  rightZoneColor.nscale8_video(56);
 
   if (pongHitFlashPlayer == 1) {
     leftZoneColor = PONG_HIT_FLASH_COLOR;
@@ -2888,13 +2888,13 @@ void renderPongDuelGame() {
     for (int i = 0; i < p1BonusBand; i++) {
       int16_t index = player1ZoneEnd - i;
       if (index >= 0 && index < activeLedCount) {
-        leds[index] += CRGB(80, 80, 80);
+        leds[index] += CRGB(220, 0, 0);
       }
     }
     for (int i = 0; i < p2BonusBand; i++) {
       int16_t index = player2ZoneStart + i;
       if (index >= 0 && index < activeLedCount) {
-        leds[index] += CRGB(80, 80, 80);
+        leds[index] += CRGB(0, 0, 220);
       }
     }
   }
@@ -3667,6 +3667,15 @@ void updateButtonLEDs() {
     }
     return;
   }
+
+  // During idle screen saver rendering, run a 1-second chase across all 4 button LEDs.
+  if (idlePauseBlend > 0) {
+    uint8_t activeIndex = (uint8_t)((millis() / 1000UL) % 4UL);
+    for (int i = 0; i < 4; i++) {
+      digitalWrite(btnLEDPins[i], (i == activeIndex) ? HIGH : LOW);
+    }
+    return;
+  }
   
   switch (buttonLEDMode) {
     case LED_MODE_INVERTED:
@@ -3837,6 +3846,15 @@ void getPlayer2LedControlState(uint8_t *maskOut, uint8_t *pressMaskOut, uint8_t 
 
   if (settingsModeActive || modeDotsActive || gameState != STATE_PLAYING) {
     *maskOut = 0;
+    *pressMaskOut = 0;
+    *flagsOut = PLAYER2_LED_FLAG_NONE;
+    return;
+  }
+
+  // During idle screen saver rendering, run a 1-second chase on all 4 Player-2 LEDs.
+  if (idlePauseBlend > 0) {
+    uint8_t activeIndex = (uint8_t)((millis() / 1000UL) % 4UL);
+    *maskOut = (uint8_t)(1U << activeIndex);
     *pressMaskOut = 0;
     *flagsOut = PLAYER2_LED_FLAG_NONE;
     return;

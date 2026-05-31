@@ -337,12 +337,12 @@ Edit `src/controller.cpp` to select your LED strip:
 ```cpp
 // Uncomment ONE of these:
 // #define LED_SETUP_WS2812B_30
-#define LED_SETUP_WS2815_288   // WS2815 profile (300 max initialized, 288 default active)
+#define LED_SETUP_WS2815_288   // WS2815 profile (300 max initialized, 300 default active)
 ```
 
 **Important:**
 - `NUM_LEDS` (hardware max initialized) is **300** for WS2815 profile
-- Default gameplay length starts at **288** (`activeLedCount`)
+- Default gameplay length starts at **300** (`activeLedCount`)
 - You can change active length in wired settings mode (LED length adjust)
 
 ### Game Speed Tuning
