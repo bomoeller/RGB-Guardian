@@ -30,7 +30,7 @@ static const uint8_t buttonLedPins[BUTTON_COUNT] = {BTN_LED_RED_PIN, BTN_LED_GRE
 static const uint8_t buttonCodes[BUTTON_COUNT] = {0x10, 0x11, 0x12, 0x13};
 static const char* buttonNames[BUTTON_COUNT] = {"RED", "GREEN", "BLUE", "WHITE"};
 
-static const unsigned long LOCAL_DEBOUNCE_MS = 25;
+static const unsigned long LOCAL_DEBOUNCE_MS = 35;
 static const uint8_t ESPNOW_FIXED_CHANNEL = 1;
 static const uint16_t STARTUP_SERIAL_GRACE_MS = 1500;
 static const uint16_t STARTUP_SUMMARY_REPEAT_MS = 2000;
@@ -41,8 +41,9 @@ static const uint8_t CONTROLLER_MAC[6] = {0x84, 0x1F, 0xE8, 0x39, 0xAC, 0x1C};
 
 Player2EspNowPacket packetBuffer = {};
 uint8_t sequenceCounter = 0;
-bool lastButtonState[BUTTON_COUNT] = {HIGH, HIGH, HIGH, HIGH};
-unsigned long lastDebounceAt[BUTTON_COUNT] = {0, 0, 0, 0};
+bool stableButtonState[BUTTON_COUNT] = {HIGH, HIGH, HIGH, HIGH};
+bool rawButtonState[BUTTON_COUNT] = {HIGH, HIGH, HIGH, HIGH};
+unsigned long rawStateChangedAt[BUTTON_COUNT] = {0, 0, 0, 0};
 bool startupSummaryEnabled = false;
 unsigned long nextStartupSummaryAt = 0;
 uint8_t startupSummaryRepeatsRemaining = 0;
@@ -210,8 +211,10 @@ void sendButtonPress(uint8_t buttonIndex) {
 void setupButtons() {
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     pinMode(buttonPins[i], INPUT_PULLUP);
-    lastButtonState[i] = digitalRead(buttonPins[i]);
-    lastDebounceAt[i] = 0;
+    bool initialState = digitalRead(buttonPins[i]);
+    stableButtonState[i] = initialState;
+    rawButtonState[i] = initialState;
+    rawStateChangedAt[i] = millis();
   }
 
   Serial.println("[TX] Buttons initialized on GPIO16,17,21,22");
@@ -237,15 +240,22 @@ void pollButtons() {
   unsigned long now = millis();
 
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
-    bool currentState = digitalRead(buttonPins[i]);
-    bool pressedEdge = (lastButtonState[i] == HIGH && currentState == LOW);
+    bool currentRawState = digitalRead(buttonPins[i]);
 
-    if (pressedEdge && (now - lastDebounceAt[i] >= LOCAL_DEBOUNCE_MS)) {
-      lastDebounceAt[i] = now;
-      sendButtonPress(i);
+    if (currentRawState != rawButtonState[i]) {
+      rawButtonState[i] = currentRawState;
+      rawStateChangedAt[i] = now;
     }
 
-    lastButtonState[i] = currentState;
+    if (stableButtonState[i] != rawButtonState[i] &&
+        (now - rawStateChangedAt[i] >= LOCAL_DEBOUNCE_MS)) {
+      stableButtonState[i] = rawButtonState[i];
+
+      // Send one press only when a debounced transition reaches active-low pressed.
+      if (stableButtonState[i] == LOW) {
+        sendButtonPress(i);
+      }
+    }
   }
 
   updateButtonLeds();

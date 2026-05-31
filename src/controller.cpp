@@ -98,6 +98,8 @@
 // Animation durations
 #define WIN_ANIMATION_DURATION 500    // ms - quick celebration
 #define LOSE_ANIMATION_DURATION 4000  // ms
+const uint16_t MEMORY_KILL_SHRINK_DURATION_MS = 1000;
+const uint16_t MEMORY_KILL_PAUSE_DURATION_MS = 1000;
 
 // ============================================
 // GAME STATE DATA STRUCTURES
@@ -210,8 +212,11 @@ uint8_t memoryPlaybackStep = 0;
 uint8_t memorySequenceLength = 0;
 uint8_t memorySequenceColors[MAX_BOSS_PARTS] = {0};
 unsigned long memoryPlaybackTimer = 0;
+bool memoryPlaybackPending = false;
+unsigned long memoryPlaybackPendingUntil = 0;
 const uint16_t MEMORY_LED_ON_MS = 350;
 const uint16_t MEMORY_LED_OFF_MS = 180;
+const uint16_t MEMORY_REPLAY_PAUSE_MS = 2000;
 
 // ============================================
 // ESP-NOW REMOTE CONTROL VARIABLES
@@ -339,12 +344,14 @@ const uint16_t PONG_SERVE_COUNTDOWN_MS = 3000;
 const uint16_t PONG_HIT_FLASH_MS = 80;
 const uint16_t PONG_POINT_FLASH_MS = 600;
 const uint16_t PONG_MATCH_OVER_MS = 2200;
+const uint16_t PONG_INPUT_COOLDOWN_MS = 120;
 const CRGB PONG_PLAYER1_COLOR = CRGB(180, 20, 20);
 const CRGB PONG_PLAYER2_COLOR = CRGB(30, 80, 210);
 const CRGB PONG_BALL_COLOR = CRGB::White;
 const CRGB PONG_SERVE_COLOR = CRGB(255, 200, 40);
 const CRGB PONG_HIT_FLASH_COLOR = CRGB(255, 120, 0);
 const CRGB PONG_MISS_FLASH_COLOR = CRGB(255, 0, 0);
+unsigned long pongLastInputAtByPlayer[3] = {0, 0, 0};  // index 1=P1, 2=P2
 
 // ============================================
 // FUNCTION DECLARATIONS
@@ -362,6 +369,7 @@ void renderGame();
 void playWinAnimation();
 void playLoseAnimation();
 void playLifeLostAnimation();
+void renderMemoryKillShrink(unsigned long elapsed);
 bool isBossDefeated();
 void initWiFi();
 void initESPNOW();
@@ -378,7 +386,7 @@ void flushUnknownRemoteReport();
 void printMacToSerial(const uint8_t *mac);
 void updateButtonLEDs();
 int8_t getNextColorToShoot();
-void startMemoryPlaybackSequence();
+void startMemoryPlaybackSequence(uint16_t startDelayMs = 0);
 void cycleButtonLEDMode();
 void updateModeDotsIndicator();
 void renderModeDotsIndicator();
@@ -409,6 +417,7 @@ void resolveAllVsAllShotVsShotCollisions();
 void fireAllVsAllShotPlayer1(uint8_t color);
 void fireAllVsAllShotPlayer2(uint8_t color);
 void initPongDuelMode();
+void handlePongInputForPlayer(uint8_t player);
 void handlePongHitPlayer1();
 void handlePongHitPlayer2();
 void updatePongDuelGame();
@@ -426,7 +435,9 @@ uint16_t getPongInitialBallDelay();
 uint16_t getPongMinimumBallDelay();
 uint16_t getPongSpeedupPerReturn();
 uint16_t getPongEarlyHitMaxBonus();
+bool isPongPlayersTurn(uint8_t player);
 bool isPongHitWindowForPlayer(uint8_t player);
+bool isPongInputOnCooldown(uint8_t player, unsigned long now);
 uint16_t getPongEarlyHitBonus(uint8_t player);
 void renderSharedWinSparkle(unsigned long elapsed);
 void startModeSelectionIndicator();
@@ -687,8 +698,10 @@ void spawnBoss() {
   }
   Serial.println();
 
-  // In memory mode, play the sequence when a new boss is initialized.
-  startMemoryPlaybackSequence();
+  // In memory mode, start playback immediately after the defeat animation pause ends.
+  if (buttonLEDMode == LED_MODE_MEMORY) {
+    startMemoryPlaybackSequence();
+  }
 }
 
 void respawnBossAfterLifeLoss() {
@@ -733,7 +746,7 @@ void respawnBossAfterLifeLoss() {
   Serial.printf("[DEBUG] Boss color: %s\n", colorName);
 
   // In memory mode, replay sequence after respawn.
-  startMemoryPlaybackSequence();
+  startMemoryPlaybackSequence(MEMORY_REPLAY_PAUSE_MS);
 }
 
 // ============================================
@@ -945,9 +958,7 @@ void handleButtons() {
       // Direct mapping: Button 1=0(Red), 2=1(Green), 3=2(Blue), 4=3(White)
       if (buttonLEDMode == LED_MODE_PONG_DUEL) {
         if (i == 0) {
-          handlePongHitPlayer1();
-        } else if (i == 3) {
-          handlePongHitPlayer2();
+          handlePongInputForPlayer(1);
         }
       } else if (buttonLEDMode == LED_MODE_DUEL) {
         fireDuelShotPlayer1(i);
@@ -1199,6 +1210,12 @@ void playWinAnimation() {
   
   if (elapsed < WIN_ANIMATION_DURATION) {
     renderSharedWinSparkle(elapsed);
+  } else if (buttonLEDMode == LED_MODE_MEMORY && elapsed < (WIN_ANIMATION_DURATION + MEMORY_KILL_SHRINK_DURATION_MS + MEMORY_KILL_PAUSE_DURATION_MS)) {
+    unsigned long memoryElapsed = elapsed - WIN_ANIMATION_DURATION;
+    if (memoryElapsed > MEMORY_KILL_SHRINK_DURATION_MS) {
+      memoryElapsed = MEMORY_KILL_SHRINK_DURATION_MS;
+    }
+    renderMemoryKillShrink(memoryElapsed);
   } else {
     // Animation done - next level
     currentLevel++;
@@ -1224,6 +1241,34 @@ void renderSharedWinSparkle(unsigned long elapsed) {
       leds[pos] = CRGB(255, 215, 0);  // Gold
     }
   }
+}
+
+void renderMemoryKillShrink(unsigned long elapsed) {
+  FastLED.clear();
+
+  if (activeLedCount <= 0) {
+    return;
+  }
+
+  if (elapsed > MEMORY_KILL_SHRINK_DURATION_MS) {
+    elapsed = MEMORY_KILL_SHRINK_DURATION_MS;
+  }
+
+  uint16_t litCount = (uint16_t)(((uint32_t)(MEMORY_KILL_SHRINK_DURATION_MS - elapsed) * (uint32_t)activeLedCount) / (uint32_t)MEMORY_KILL_SHRINK_DURATION_MS);
+  if (litCount < 1) {
+    litCount = 1;
+  }
+
+  if (litCount > (uint16_t)activeLedCount) {
+    litCount = (uint16_t)activeLedCount;
+  }
+
+  for (uint16_t i = 0; i < litCount; i++) {
+    uint8_t fade = (litCount > 1) ? (uint8_t)(255 - ((uint32_t)i * 120U / (litCount - 1))) : 255;
+    leds[i] = CRGB(fade, (uint8_t)(fade / 3), 0);
+  }
+
+  leds[0] = CRGB::White;
 }
 
 void playLoseAnimation() {
@@ -1577,7 +1622,7 @@ void processRemoteCommand() {
         Serial.println("[REMOTE] Button 1 - Fire RED");
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
           if (buttonLEDMode == LED_MODE_PONG_DUEL) {
-            handlePongHitPlayer2();
+            Serial.println("[REMOTE] Pong: RED ignored (use BLUE for Player 2)");
           } else if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(0);
           } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
@@ -1594,7 +1639,7 @@ void processRemoteCommand() {
         Serial.println("[REMOTE] Button 2 - Fire GREEN");
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
           if (buttonLEDMode == LED_MODE_PONG_DUEL) {
-            handlePongHitPlayer2();
+            Serial.println("[REMOTE] Pong: GREEN ignored (use BLUE for Player 2)");
           } else if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(1);
           } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
@@ -1611,7 +1656,7 @@ void processRemoteCommand() {
         Serial.println("[REMOTE] Button 3 - Fire BLUE");
         if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
           if (buttonLEDMode == LED_MODE_PONG_DUEL) {
-            handlePongHitPlayer2();
+            handlePongInputForPlayer(2);
           } else if (buttonLEDMode == LED_MODE_DUEL) {
             fireDuelShotPlayer2(2);
           } else if (buttonLEDMode == LED_MODE_ALL_VS_ALL) {
@@ -1626,9 +1671,9 @@ void processRemoteCommand() {
         
       case 0x13:  // Button 4 - Fire WHITE (only in 4-color mode)
         if (buttonLEDMode == LED_MODE_PONG_DUEL) {
-          Serial.println("[REMOTE] Button 4 - Pong HIT");
+          Serial.println("[REMOTE] Pong: WHITE ignored (use BLUE for Player 2)");
           if (!modeDotsActive && !(buttonLEDMode == LED_MODE_MEMORY && memoryPlaybackActive)) {
-            handlePongHitPlayer2();
+            // Intentionally ignored in Pong mode.
           }
         } else if (numColors == 4) {
           Serial.println("[REMOTE] Button 4 - Fire WHITE");
@@ -2422,6 +2467,34 @@ bool isPongHitWindowForPlayer(uint8_t player) {
   return (pongBallDirection > 0 && pongBallPosition >= getPongPlayer2ZoneStart() && pongBallPosition < activeLedCount);
 }
 
+bool isPongPlayersTurn(uint8_t player) {
+  if (pongPhase != PONG_PHASE_BALL_MOVING) {
+    return false;
+  }
+
+  if (player == 1) {
+    return pongBallDirection < 0;
+  }
+
+  if (player == 2) {
+    return pongBallDirection > 0;
+  }
+
+  return false;
+}
+
+bool isPongInputOnCooldown(uint8_t player, unsigned long now) {
+  if (player < 1 || player > 2) {
+    return true;
+  }
+
+  if (pongLastInputAtByPlayer[player] == 0) {
+    return false;
+  }
+
+  return (now - pongLastInputAtByPlayer[player]) < PONG_INPUT_COOLDOWN_MS;
+}
+
 uint16_t getPongEarlyHitBonus(uint8_t player) {
   uint16_t maxBonus = getPongEarlyHitMaxBonus();
   uint8_t zoneSize = getPongZoneSizeForPlayer(player);
@@ -2465,6 +2538,8 @@ void startPongServeCountdown() {
   pongLastBallMove = pongPhaseStart;
   pongHitFlashPlayer = 0;
   pongHitFlashUntil = 0;
+  pongLastInputAtByPlayer[1] = 0;
+  pongLastInputAtByPlayer[2] = 0;
 
   Serial.printf("[PONG] Serve countdown started toward %s\n",
                 (pongBallDirection < 0) ? "Player 1" : "Player 2");
@@ -2477,14 +2552,16 @@ void initPongDuelMode() {
   pongPointWinner = 0;
   pongPointLoser = 0;
   pongMatchWinner = 0;
+  pongLastInputAtByPlayer[1] = 0;
+  pongLastInputAtByPlayer[2] = 0;
   pongNextServeDirection = ((millis() / 100) & 0x01) ? 1 : -1;
   idlePauseActive = false;
   idlePauseTargetActive = false;
   startPongServeCountdown();
 
   Serial.println("[PONG] PONG DUEL mode started");
-  Serial.println("[PONG] P1: local RED button");
-  Serial.println("[PONG] P2: wireless remote / Player-2, optional local WHITE fallback");
+  Serial.println("[PONG] P1: local RED button only");
+  Serial.println("[PONG] P2: wireless remote / Player-2 BLUE button only");
 }
 
 void scorePongPoint(uint8_t winner, const char* reason) {
@@ -2517,10 +2594,38 @@ void scorePongPoint(uint8_t winner, const char* reason) {
                 pongPlayer2Score);
 }
 
+void handlePongInputForPlayer(uint8_t player) {
+  unsigned long now = millis();
+
+  if (player < 1 || player > 2) {
+    return;
+  }
+
+  if (!isPongPlayersTurn(player)) {
+    return;
+  }
+
+  if (isPongInputOnCooldown(player, now)) {
+    return;
+  }
+
+  pongLastInputAtByPlayer[player] = now;
+
+  if (player == 1) {
+    handlePongHitPlayer1();
+  } else {
+    handlePongHitPlayer2();
+  }
+}
+
 void handlePongHitPlayer1() {
   uint16_t newDelay;
 
   lastAnyShotFiredAt = millis();
+
+  if (!isPongPlayersTurn(1)) {
+    return;
+  }
 
   if (pongPhase != PONG_PHASE_BALL_MOVING) {
     return;
@@ -2548,6 +2653,10 @@ void handlePongHitPlayer2() {
   uint16_t newDelay;
 
   lastAnyShotFiredAt = millis();
+
+  if (!isPongPlayersTurn(2)) {
+    return;
+  }
 
   if (pongPhase != PONG_PHASE_BALL_MOVING) {
     return;
@@ -3401,8 +3510,9 @@ int8_t getNextColorToShoot() {
 }
 
 // Build and start memory playback sequence from active boss parts (front to back)
-void startMemoryPlaybackSequence() {
+void startMemoryPlaybackSequence(uint16_t startDelayMs) {
   memorySequenceLength = 0;
+  memoryPlaybackPending = false;
 
   if (buttonLEDMode != LED_MODE_MEMORY || gameState != STATE_PLAYING) {
     memoryPlaybackActive = false;
@@ -3420,10 +3530,18 @@ void startMemoryPlaybackSequence() {
     return;
   }
 
-  memoryPlaybackActive = true;
-  memoryPlaybackLedOn = true;
   memoryPlaybackStep = 0;
-  memoryPlaybackTimer = millis();
+  if (startDelayMs == 0) {
+    memoryPlaybackActive = true;
+    memoryPlaybackLedOn = true;
+    memoryPlaybackTimer = millis();
+  } else {
+    memoryPlaybackActive = false;
+    memoryPlaybackLedOn = false;
+    memoryPlaybackTimer = 0;
+    memoryPlaybackPending = true;
+    memoryPlaybackPendingUntil = millis() + startDelayMs;
+  }
 
   Serial.printf("[INFO] MEMORY mode: Playing sequence with %d step(s)\n", memorySequenceLength);
 }
@@ -3484,7 +3602,19 @@ void updateButtonLEDs() {
 
       if (gameState != STATE_PLAYING) {
         memoryPlaybackActive = false;
+        memoryPlaybackPending = false;
         break;
+      }
+
+      if (!memoryPlaybackActive && memoryPlaybackPending) {
+        unsigned long now = millis();
+        if (now >= memoryPlaybackPendingUntil) {
+          memoryPlaybackPending = false;
+          memoryPlaybackActive = true;
+          memoryPlaybackLedOn = true;
+          memoryPlaybackStep = 0;
+          memoryPlaybackTimer = now;
+        }
       }
 
       if (memoryPlaybackActive && memoryPlaybackStep < memorySequenceLength) {
@@ -3512,6 +3642,15 @@ void updateButtonLEDs() {
               memoryPlaybackTimer = now;
             }
           }
+        }
+      } else if (!memoryPlaybackPending) {
+        for (int i = 0; i < buttonsToControl; i++) {
+          bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
+          digitalWrite(btnLEDPins[i], buttonPressed ? HIGH : LOW);
+        }
+
+        if (numColors == 3) {
+          digitalWrite(BTN_LED_WHITE_PIN, LOW);
         }
       }
       break;
@@ -3562,18 +3701,15 @@ void updateButtonLEDs() {
 
     case LED_MODE_PONG_DUEL: {
       bool player1Pressed = (digitalRead(BTN1_PIN) == LOW);
-      bool player2Pressed = (digitalRead(BTN4_PIN) == LOW);
-
       digitalWrite(BTN_LED_GREEN_PIN, LOW);
       digitalWrite(BTN_LED_BLUE_PIN, LOW);
+      digitalWrite(BTN_LED_WHITE_PIN, LOW);
 
       if (pongPhase == PONG_PHASE_SERVE_COUNTDOWN) {
         bool pulseOn = (((millis() - pongPhaseStart) / 180) % 2) == 0;
         digitalWrite(BTN_LED_RED_PIN, pulseOn ? HIGH : LOW);
-        digitalWrite(BTN_LED_WHITE_PIN, pulseOn ? HIGH : LOW);
       } else {
         digitalWrite(BTN_LED_RED_PIN, player1Pressed ? LOW : HIGH);
-        digitalWrite(BTN_LED_WHITE_PIN, player2Pressed ? LOW : HIGH);
       }
       break;
     }
