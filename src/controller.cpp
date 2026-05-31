@@ -165,7 +165,7 @@ ButtonLEDMode buttonLEDMode = LED_MODE_INVERTED;  // Default mode
 bool settingsModeActive = false;
 bool settingsWaitRelease = false;
 unsigned long settingsChordStart = 0;
-const uint16_t SETTINGS_ENTER_HOLD_MS = 1000;
+const uint16_t SETTINGS_ENTER_HOLD_MS = 3000;
 const uint16_t SETTINGS_INACTIVITY_TIMEOUT_MS = 10000;
 const uint16_t SETTINGS_RED_LONG_PRESS_MS = 3000;
 ButtonLEDMode settingsSelectedMode = LED_MODE_INVERTED;
@@ -203,7 +203,7 @@ CRGB idlePauseFrame[NUM_LEDS];
 bool modeDotsActive = false;
 unsigned long modeDotsStartTime = 0;
 const uint16_t MODE_DOTS_DURATION_MS = 2000;
-const CRGB MODE_DOT_COLOR = CRGB(200, 162, 255);  // Lilac
+const CRGB MODE_DOT_COLOR = CRGB(200, 110, 0);  // Dark yellow / orange-ish
 
 // Memory mode playback state
 bool memoryPlaybackActive = false;
@@ -233,6 +233,9 @@ const uint8_t ALLOWED_REMOTE_MACS[ALLOWED_REMOTE_SLOT_COUNT][6] = {
   {0x98, 0x77, 0xD5, 0x98, 0x33, 0x8A},
   {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 };
+// Optional startup target for Player-2 control packets. If a different Player-2 sender appears,
+// control is automatically re-bound to that sender MAC.
+const uint8_t PLAYER2_CONTROL_FALLBACK_MAC[6] = {0x84, 0x1F, 0xE8, 0x39, 0xD2, 0x48};
 volatile uint8_t remoteCommandQueue[REMOTE_COMMAND_QUEUE_SIZE] = {0};
 volatile uint8_t remoteCommandQueueHead = 0;
 volatile uint8_t remoteCommandQueueTail = 0;
@@ -244,12 +247,20 @@ uint8_t lastPlayer2SenderMac[6] = {0, 0, 0, 0, 0, 0};
 bool lastPlayer2SenderMacValid = false;
 uint8_t lastPlayer2Sequence = 0;
 bool lastPlayer2SequenceValid = false;
+uint8_t player2ControlSequence = 0;
+uint8_t lastPlayer2LedMaskSent = 0xFF;
+uint8_t lastPlayer2LedPressMaskSent = 0xFF;
+uint8_t lastPlayer2LedFlagsSent = 0xFF;
+unsigned long lastPlayer2LedMaskSentAt = 0;
+bool player2PeerReady = false;
+uint8_t player2PeerMac[6] = {0, 0, 0, 0, 0, 0};
 volatile bool unknownRemoteReportPending = false;
 volatile int unknownRemotePacketLength = 0;
 volatile uint8_t unknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
 uint8_t lastReportedUnknownRemoteMac[6] = {0, 0, 0, 0, 0, 0};
 unsigned long lastUnknownRemoteReportAt = 0;
 const uint16_t UNKNOWN_REMOTE_REPORT_SUPPRESS_MS = 1500;
+const uint16_t PLAYER2_LED_HEARTBEAT_MS = 250;
 
 // Ghost Boss mode settings
 bool ghostBossModeEnabled = false;
@@ -373,6 +384,7 @@ void renderMemoryKillShrink(unsigned long elapsed);
 bool isBossDefeated();
 void initWiFi();
 void initESPNOW();
+void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
 void processRemoteCommand();
 bool enqueueRemoteCommand(uint8_t command);
@@ -385,6 +397,10 @@ void queueUnknownRemoteReport(const uint8_t *mac, int len);
 void flushUnknownRemoteReport();
 void printMacToSerial(const uint8_t *mac);
 void updateButtonLEDs();
+bool ensurePlayer2PeerRegistered(const uint8_t *mac);
+void forcePlayer2LedControlRefresh();
+void getPlayer2LedControlState(uint8_t *mask, uint8_t *pressMask, uint8_t *flags);
+void sendPlayer2LedControlPacket();
 int8_t getNextColorToShoot();
 void startMemoryPlaybackSequence(uint16_t startDelayMs = 0);
 void cycleButtonLEDMode();
@@ -563,6 +579,7 @@ void loop() {
     updateGhostBossVisibility();
   }
   updateButtonLEDs();      // Update button LED states based on mode
+  sendPlayer2LedControlPacket();
   
   switch (gameState) {
     case STATE_PLAYING:
@@ -1425,6 +1442,42 @@ void initWiFi() {
   Serial.printf("[ESPNOW] ESP-NOW channel: %u\n", (unsigned)ESPNOW_FIXED_CHANNEL);
 }
 
+void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  (void)mac_addr;
+  (void)status;
+}
+
+bool ensurePlayer2PeerRegistered(const uint8_t *mac) {
+  esp_now_peer_info_t peerInfo = {};
+
+  if (mac == nullptr || !isMacConfigured(mac)) {
+    return false;
+  }
+
+  if (esp_now_is_peer_exist(mac)) {
+    memcpy(player2PeerMac, mac, 6);
+    player2PeerReady = true;
+    return true;
+  }
+
+  memcpy(peerInfo.peer_addr, mac, 6);
+  peerInfo.channel = ESPNOW_FIXED_CHANNEL;
+  peerInfo.ifidx = WIFI_IF_STA;
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("[ESPNOW] WARNING: Failed to add Player-2 peer for control packets");
+    return false;
+  }
+
+  memcpy(player2PeerMac, mac, 6);
+  player2PeerReady = true;
+  Serial.print("[ESPNOW] Player-2 control peer ready: ");
+  printMacToSerial(player2PeerMac);
+  Serial.println();
+  return true;
+}
+
 void initESPNOW() {
   if (esp_now_init() != ESP_OK) {
     Serial.println("[ESPNOW] ERROR: Failed to initialize ESP-NOW");
@@ -1447,8 +1500,10 @@ void initESPNOW() {
   }
 
   // Register receive callback
+  esp_now_register_send_cb(onDataSent);
   esp_now_register_recv_cb(onDataRecv);
   Serial.println("[ESPNOW] Receive callback registered");
+  ensurePlayer2PeerRegistered(PLAYER2_CONTROL_FALLBACK_MAC);
   Serial.println("[ESPNOW] Waiting for remote commands...");
 }
 
@@ -1567,37 +1622,53 @@ void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int l
 bool handlePlayer2EspNowPacket(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
   char macStr[18];
   bool senderChanged;
-  const Player2EspNowPacket *packet;
+  uint8_t packetSequence;
+  uint8_t buttonCode;
+  uint8_t packetType;
 
-  if (!isPlayer2EspNowPacket(data, len)) {
+  if (isPlayer2EspNowPacket(data, len)) {
+    const Player2EspNowPacket *packet = reinterpret_cast<const Player2EspNowPacket*>(data);
+    packetSequence = packet->sequence;
+    buttonCode = packet->buttonCode;
+    packetType = PLAYER2_PACKET_TYPE_BUTTON_EVENT;
+  } else if (isPlayer2EspNowPacketV2(data, len)) {
+    const Player2EspNowPacketV2 *packetV2 = reinterpret_cast<const Player2EspNowPacketV2*>(data);
+    packetSequence = packetV2->sequence;
+    buttonCode = packetV2->arg0;
+    packetType = packetV2->packetType;
+  } else {
     return false;
   }
 
-  packet = reinterpret_cast<const Player2EspNowPacket*>(data);
   senderChanged = !lastPlayer2SenderMacValid || memcmp(recv_info->src_addr, lastPlayer2SenderMac, 6) != 0;
 
   if (senderChanged) {
     memcpy(lastPlayer2SenderMac, recv_info->src_addr, 6);
     lastPlayer2SenderMacValid = true;
     lastPlayer2SequenceValid = false;
+    ensurePlayer2PeerRegistered(lastPlayer2SenderMac);
   }
 
-  if (lastPlayer2SequenceValid && packet->sequence == lastPlayer2Sequence) {
+  if (lastPlayer2SequenceValid && packetSequence == lastPlayer2Sequence) {
     return true;
   }
 
-  lastPlayer2Sequence = packet->sequence;
+  lastPlayer2Sequence = packetSequence;
   lastPlayer2SequenceValid = true;
-  enqueueRemoteCommand(packet->buttonCode);
+
+  if (packetType == PLAYER2_PACKET_TYPE_BUTTON_EVENT) {
+    enqueueRemoteCommand(buttonCode);
+  }
 
   snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
            recv_info->src_addr[0], recv_info->src_addr[1], recv_info->src_addr[2],
            recv_info->src_addr[3], recv_info->src_addr[4], recv_info->src_addr[5]);
 
-  Serial.printf("[ESPNOW] Player-2 packet: %s, Seq: %u, Button: 0x%02X%s\n",
+  Serial.printf("[ESPNOW] Player-2 packet: %s, Seq: %u, Type: 0x%02X, Arg0: 0x%02X%s\n",
                 macStr,
-                packet->sequence,
-                packet->buttonCode,
+                packetSequence,
+                packetType,
+                buttonCode,
                 senderChanged ? " [new sender]" : "");
   return true;
 }
@@ -1773,6 +1844,7 @@ const char* getButtonLEDModeName(ButtonLEDMode mode) {
 
 void cycleButtonLEDMode() {
   buttonLEDMode = (ButtonLEDMode)((buttonLEDMode + 1) % LED_MODE_COUNT);
+  forcePlayer2LedControlRefresh();
 
   // Show mode number indicator before activating the selected mode behavior.
   modeDotsActive = true;
@@ -1793,6 +1865,7 @@ void cycleButtonLEDMode() {
 void startModeSelectionIndicator() {
   modeDotsActive = true;
   modeDotsStartTime = millis();
+  forcePlayer2LedControlRefresh();
 
   // Pause mode-specific effects until indicator timeout.
   memoryPlaybackActive = false;
@@ -1811,6 +1884,7 @@ void applySettingsSelectionAndExit() {
   numColors = settingsSelectedNumColors;
   activeLedCount = settingsSelectedLedCount;
   settingsLengthAdjustActive = false;
+  forcePlayer2LedControlRefresh();
 
   if (ledLengthChanged) {
     Serial.printf("[SETTINGS] Applied LED length %d -> restarting game mode\n", activeLedCount);
@@ -1849,6 +1923,7 @@ void updateModeDotsIndicator() {
   }
 
   modeDotsActive = false;
+  forcePlayer2LedControlRefresh();
 
   // Start mode-specific behavior after indicator timeout.
   ghostBossModeEnabled = (buttonLEDMode == LED_MODE_GHOST_BOSS);
@@ -1895,7 +1970,7 @@ void renderSettingsOverlay() {
     return;
   }
 
-  // Show selected mode as lilac dots at far end.
+  // Show selected mode as dark yellow/orange-ish dots at far end.
   uint8_t modeNumber = (uint8_t)settingsSelectedMode + 1;
   for (uint8_t dot = 0; dot < modeNumber; dot++) {
     int dotEndPos = ((int)previewLedCount - 1) - (dot * 4);
@@ -2744,6 +2819,8 @@ void renderPongDuelGame() {
   int16_t rightCenter = activeLedCount / 2;
   int16_t player1ZoneEnd = getPongPlayer1ZoneEnd();
   int16_t player2ZoneStart = getPongPlayer2ZoneStart();
+  uint8_t player1ZoneSize = getPongZoneSizeForPlayer(1);
+  uint8_t player2ZoneSize = getPongZoneSizeForPlayer(2);
   unsigned long now = millis();
   CRGB leftZoneColor = PONG_PLAYER1_COLOR;
   CRGB rightZoneColor = PONG_PLAYER2_COLOR;
@@ -2787,6 +2864,38 @@ void renderPongDuelGame() {
   for (int i = player2ZoneStart; i < activeLedCount; i++) {
     if (i >= 0) {
       leds[i] = rightZoneColor;
+    }
+  }
+
+  if (pongPhase == PONG_PHASE_BALL_MOVING) {
+    // Highlight the center-side band where early hits award the largest speed bonus.
+    uint8_t p1BonusBand = player1ZoneSize / 3;
+    uint8_t p2BonusBand = player2ZoneSize / 3;
+
+    if (p1BonusBand < 2) {
+      p1BonusBand = 2;
+    }
+    if (p2BonusBand < 2) {
+      p2BonusBand = 2;
+    }
+    if (p1BonusBand > player1ZoneSize) {
+      p1BonusBand = player1ZoneSize;
+    }
+    if (p2BonusBand > player2ZoneSize) {
+      p2BonusBand = player2ZoneSize;
+    }
+
+    for (int i = 0; i < p1BonusBand; i++) {
+      int16_t index = player1ZoneEnd - i;
+      if (index >= 0 && index < activeLedCount) {
+        leds[index] += CRGB(80, 80, 80);
+      }
+    }
+    for (int i = 0; i < p2BonusBand; i++) {
+      int16_t index = player2ZoneStart + i;
+      if (index >= 0 && index < activeLedCount) {
+        leds[index] += CRGB(80, 80, 80);
+      }
     }
   }
 
@@ -3716,6 +3825,123 @@ void updateButtonLEDs() {
   }
 }
 
+void getPlayer2LedControlState(uint8_t *maskOut, uint8_t *pressMaskOut, uint8_t *flagsOut) {
+  uint8_t mask = 0;
+  uint8_t pressMask = 0;
+  uint8_t flags = PLAYER2_LED_FLAG_NONE;
+  uint8_t activeColorMask = (numColors == 4) ? 0x0F : 0x07;
+
+  if (maskOut == nullptr || pressMaskOut == nullptr || flagsOut == nullptr) {
+    return;
+  }
+
+  if (settingsModeActive || modeDotsActive || gameState != STATE_PLAYING) {
+    *maskOut = 0;
+    *pressMaskOut = 0;
+    *flagsOut = PLAYER2_LED_FLAG_NONE;
+    return;
+  }
+
+  switch (buttonLEDMode) {
+    case LED_MODE_INVERTED:
+    case LED_MODE_GHOST_BOSS:
+    case LED_MODE_DUEL:
+    case LED_MODE_COOP:
+    case LED_MODE_ALL_VS_ALL:
+      mask = activeColorMask;
+      pressMask = activeColorMask;
+      flags = PLAYER2_LED_FLAG_PRESS_TURNS_OFF;
+      break;
+
+    case LED_MODE_FOLLOW_ME: {
+      int8_t nextColor = getNextColorToShoot();
+      if (nextColor >= 0 && nextColor < numColors) {
+        mask = (uint8_t)(1U << (uint8_t)nextColor);
+      }
+      break;
+    }
+
+    case LED_MODE_MEMORY:
+      if (memoryPlaybackPending) {
+        mask = 0;
+      } else if (memoryPlaybackActive && memoryPlaybackStep < memorySequenceLength && memoryPlaybackLedOn) {
+        uint8_t activeColor = memorySequenceColors[memoryPlaybackStep];
+        if (activeColor < numColors) {
+          mask = (uint8_t)(1U << activeColor);
+        }
+      } else {
+        // MEMORY input phase: dark idle, pressed key lights up.
+        mask = 0;
+        pressMask = activeColorMask;
+        flags = PLAYER2_LED_FLAG_PRESS_TURNS_ON;
+      }
+      break;
+
+    case LED_MODE_PONG_DUEL:
+      if (pongPhase == PONG_PHASE_SERVE_COUNTDOWN) {
+        bool pulseOn = (((millis() - pongPhaseStart) / 180) % 2) == 0;
+        mask = pulseOn ? (uint8_t)(1U << 2) : 0;
+      } else {
+        // Player-2 Pong input is BLUE only.
+        mask = (uint8_t)(1U << 2);
+        pressMask = (uint8_t)(1U << 2);
+        flags = PLAYER2_LED_FLAG_PRESS_TURNS_OFF;
+      }
+      break;
+  }
+
+  *maskOut = mask;
+  *pressMaskOut = pressMask;
+  *flagsOut = flags;
+}
+
+void forcePlayer2LedControlRefresh() {
+  lastPlayer2LedMaskSent = 0xFF;
+  lastPlayer2LedPressMaskSent = 0xFF;
+  lastPlayer2LedFlagsSent = 0xFF;
+  lastPlayer2LedMaskSentAt = 0;
+}
+
+void sendPlayer2LedControlPacket() {
+  Player2EspNowPacketV2 packet = {};
+  uint8_t mask;
+  uint8_t pressMask;
+  uint8_t flags;
+  unsigned long now = millis();
+  bool heartbeatDue;
+
+  if (!player2PeerReady) {
+    return;
+  }
+
+  getPlayer2LedControlState(&mask, &pressMask, &flags);
+  heartbeatDue = (lastPlayer2LedMaskSentAt == 0) || ((now - lastPlayer2LedMaskSentAt) >= PLAYER2_LED_HEARTBEAT_MS);
+
+  if (!heartbeatDue &&
+      mask == lastPlayer2LedMaskSent &&
+      pressMask == lastPlayer2LedPressMaskSent &&
+      flags == lastPlayer2LedFlagsSent) {
+    return;
+  }
+
+  packet.magic0 = PLAYER2_PACKET_MAGIC_0;
+  packet.magic1 = PLAYER2_PACKET_MAGIC_1;
+  packet.version = PLAYER2_PACKET_VERSION_V2;
+  packet.packetType = PLAYER2_PACKET_TYPE_LED_STATE;
+  packet.sequence = player2ControlSequence;
+  packet.arg0 = mask;
+  packet.arg1 = pressMask;
+  packet.flags = flags;
+
+  if (esp_now_send(player2PeerMac, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)) == ESP_OK) {
+    player2ControlSequence++;
+    lastPlayer2LedMaskSent = mask;
+    lastPlayer2LedPressMaskSent = pressMask;
+    lastPlayer2LedFlagsSent = flags;
+    lastPlayer2LedMaskSentAt = now;
+  }
+}
+
 void adjustSettingsLedCount(int16_t delta) {
   int32_t next = (int32_t)settingsSelectedLedCount + delta;
   bool clampedMin = false;
@@ -3741,7 +3967,14 @@ void adjustSettingsLedCount(int16_t delta) {
 }
 
 void blackOutInactiveLeds() {
-  for (int i = activeLedCount; i < NUM_LEDS; i++) {
+  uint16_t cutoff = activeLedCount;
+
+  // In settings mode, render previews against the selected LED length.
+  if (settingsModeActive) {
+    cutoff = settingsSelectedLedCount;
+  }
+
+  for (int i = cutoff; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
   }
 }

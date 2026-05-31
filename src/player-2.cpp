@@ -35,6 +35,7 @@ static const uint8_t ESPNOW_FIXED_CHANNEL = 1;
 static const uint16_t STARTUP_SERIAL_GRACE_MS = 1500;
 static const uint16_t STARTUP_SUMMARY_REPEAT_MS = 2000;
 static const uint8_t STARTUP_SUMMARY_REPEAT_COUNT = 5;
+static const uint16_t REMOTE_LED_CONTROL_TIMEOUT_MS = 700;
 
 // Controller MAC (COM25) — Wemos D1 Mini32
 static const uint8_t CONTROLLER_MAC[6] = {0x84, 0x1F, 0xE8, 0x39, 0xAC, 0x1C};
@@ -49,6 +50,13 @@ unsigned long nextStartupSummaryAt = 0;
 uint8_t startupSummaryRepeatsRemaining = 0;
 int espNowVersion = -1;
 int espNowPeerCount = -1;
+bool remoteLedControlActive = false;
+uint8_t remoteLedMask = 0;
+uint8_t remoteLedPressMask = 0;
+uint8_t remoteLedFlags = PLAYER2_LED_FLAG_NONE;
+uint8_t remoteLedToggleStateMask = 0;
+bool remoteLedPrevPressed[BUTTON_COUNT] = {false, false, false, false};
+unsigned long remoteLedUpdatedAt = 0;
 
 uint8_t getCurrentWiFiChannel();
 
@@ -177,6 +185,53 @@ bool initEspNow() {
 }
 
 static void onEspNowRecv(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len) {
+  if (isPlayer2EspNowPacketV2(data, len)) {
+    const Player2EspNowPacketV2* packet = reinterpret_cast<const Player2EspNowPacketV2*>(data);
+
+    switch (packet->packetType) {
+      case PLAYER2_PACKET_TYPE_LED_STATE:
+        {
+        bool wasLocalToggle = (remoteLedFlags & PLAYER2_LED_FLAG_LOCAL_TOGGLE) != 0;
+        bool policyChanged = (remoteLedMask != packet->arg0) ||
+                             (remoteLedPressMask != packet->arg1) ||
+                             (remoteLedFlags != packet->flags);
+
+        remoteLedMask = packet->arg0;
+        remoteLedPressMask = packet->arg1;
+        remoteLedFlags = packet->flags;
+
+        if ((remoteLedFlags & PLAYER2_LED_FLAG_LOCAL_TOGGLE) != 0 && (!wasLocalToggle || policyChanged)) {
+          // Initialize local toggle state from controller-provided base state.
+          remoteLedToggleStateMask = remoteLedMask;
+        }
+
+        remoteLedControlActive = true;
+        remoteLedUpdatedAt = millis();
+        Serial.printf("[RX] Control LED packet seq=%u mask=0x%02X pressMask=0x%02X flags=0x%02X\n",
+                      packet->sequence,
+                      packet->arg0,
+                      packet->arg1,
+                      packet->flags);
+        break;
+        }
+
+      case PLAYER2_PACKET_TYPE_BEEP_CMD:
+        Serial.printf("[RX] Control BEEP packet seq=%u cmd=%u arg1=%u flags=0x%02X (reserved)\n",
+                      packet->sequence,
+                      packet->arg0,
+                      packet->arg1,
+                      packet->flags);
+        break;
+
+      default:
+        Serial.printf("[RX] Unknown v2 packet type=0x%02X seq=%u ignored\n",
+                      packet->packetType,
+                      packet->sequence);
+        break;
+    }
+    return;
+  }
+
   Serial.printf("[RX] From %02X:%02X:%02X:%02X:%02X:%02X len=%d\n",
                 recv_info->src_addr[0], recv_info->src_addr[1], recv_info->src_addr[2],
                 recv_info->src_addr[3], recv_info->src_addr[4], recv_info->src_addr[5],
@@ -230,6 +285,49 @@ void setupButtonLeds() {
 }
 
 void updateButtonLeds() {
+  unsigned long now = millis();
+
+  if (remoteLedControlActive && (now - remoteLedUpdatedAt) <= REMOTE_LED_CONTROL_TIMEOUT_MS) {
+    for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
+      bool ledOn = ((remoteLedMask >> i) & 0x01) != 0;
+      bool pressOverlayEnabled = ((remoteLedPressMask >> i) & 0x01) != 0;
+      bool buttonPressed = (stableButtonState[i] == LOW);
+      bool localToggleEnabled = (remoteLedFlags & PLAYER2_LED_FLAG_LOCAL_TOGGLE) != 0;
+
+      if (localToggleEnabled && pressOverlayEnabled) {
+        if (buttonPressed && !remoteLedPrevPressed[i]) {
+          remoteLedToggleStateMask ^= (uint8_t)(1U << i);
+        }
+        ledOn = ((remoteLedToggleStateMask >> i) & 0x01) != 0;
+      }
+
+      if (!localToggleEnabled && pressOverlayEnabled && buttonPressed) {
+        bool pressTurnsOff = (remoteLedFlags & PLAYER2_LED_FLAG_PRESS_TURNS_OFF) != 0;
+        bool pressTurnsOn = (remoteLedFlags & PLAYER2_LED_FLAG_PRESS_TURNS_ON) != 0;
+
+        if (pressTurnsOff && !pressTurnsOn) {
+          ledOn = false;
+        } else if (pressTurnsOn && !pressTurnsOff) {
+          ledOn = true;
+        }
+      }
+
+      remoteLedPrevPressed[i] = buttonPressed;
+
+      // LED_STATE mask semantics: bit=1 means LED visibly ON, matching controller behavior.
+      digitalWrite(buttonLedPins[i], ledOn ? HIGH : LOW);
+    }
+    return;
+  }
+
+  remoteLedControlActive = false;
+  remoteLedPressMask = 0;
+  remoteLedFlags = PLAYER2_LED_FLAG_NONE;
+  remoteLedToggleStateMask = 0;
+  for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
+    remoteLedPrevPressed[i] = (stableButtonState[i] == LOW);
+  }
+
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     bool buttonPressed = (digitalRead(buttonPins[i]) == LOW);
     digitalWrite(buttonLedPins[i], buttonPressed ? LOW : HIGH);

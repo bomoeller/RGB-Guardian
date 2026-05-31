@@ -17,7 +17,8 @@
 
 ### Optional Player-2 controller (Wemos D1 Mini32, COM26)
 - Same 4 color-shot buttons as Player-1 / remote
-- Button LEDs are ON by default and turn OFF when pressed
+- Button LEDs are controller-driven by current mode policy while link is active
+- If control packets time out, LEDs fall back to local button feedback
 - Sends color shots only — no mode, brightness, or reset commands
 
 ---
@@ -25,8 +26,8 @@
 ## 2) Settings Mode (No remote needed)
 
 ### Enter settings
-- Hold RED + WHITE for 1 second
-- Requirement: no shots fired during the last 1 second
+- Hold RED + WHITE for 3 seconds
+- Requirement: no shots fired during the last 3 seconds
 
 ### In settings
 - Green: mode +
@@ -49,14 +50,14 @@ Tip: mode indicator dots always show at the active strip end.
 
 ## 3) Game Modes (Off button cycles)
 
-1. INVERTED - Button LEDs are ON by default and turn OFF when pressed.
-2. FOLLOW-ME - Helper lighting shows the next likely correct color.
-3. MEMORY - System plays a sequence first, then players repeat with inputs.
-4. GHOST BOSS - Boss visibility is limited, requiring memory and timing.
-5. DUEL - Two players compete from opposite ends; first to survive/win conditions.
-6. CO-PLAY - Two players cooperate against an expanding shared boss.
-7. ALL-VS-ALL - Two players and boss conflict; shots can also eliminate opponent.
-8. PONG DUEL - Two players rally one ball back and forth and race to 5 points.
+1. 1 Player - Normal - Button LEDs are ON by default and turn OFF when pressed.
+2. 1 Player - Follow-Me - Helper lighting shows the next likely correct color.
+3. 1 Player - Memory - System plays a sequence first, then players repeat with inputs.
+4. 1 Player - Ghost Boss - Boss visibility is limited, requiring memory and timing.
+5. 2 Player - Duel - Two players compete from opposite ends; first to survive/win conditions.
+6. 2 Player - Co-Play - Two players cooperate against an expanding shared boss.
+7. 2 Player - All-vs-All - Two players and boss conflict; shots can also eliminate opponent.
+8. 2 Player - Pong Duel - Two players rally one ball back and forth and race to 5 points.
 
 Mode 7 quick rule:
 - Same-color shots cancel each other.
@@ -65,9 +66,11 @@ Mode 7 quick rule:
 
 Mode 8 quick rule:
 - Local Player-1 uses RED.
-- Local fallback Player-2 uses WHITE.
-- Wireless Player-2 can use WIZ remote or Player-2 ESP.
+- Local fallback Player-2 on controller is disabled.
+- Wireless Player-2 uses BLUE only (WIZ remote BLUE or Player-2 ESP BLUE).
 - Hit the ball only when it is in your side zone.
+- Early-hit bonus area is the center-side part of your zone (about the inner 1/3), shown brighter during ball movement.
+- Returning from that brighter area speeds the ball up more; ball speed resets to base on each new serve.
 
 ---
 

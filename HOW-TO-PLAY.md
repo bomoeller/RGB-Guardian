@@ -1,7 +1,7 @@
 ﻿# RGB Guardian - How to Play
 
-**Version:** 1.3
-**Date:** May 9, 2026
+**Version:** 1.5
+**Date:** May 31, 2026
 
 ---
 
@@ -67,7 +67,7 @@ RGB Guardian is a color-matching LED strip game where you defend your position b
 **Optional Player-2 controller:**
 - Uses the same button GPIO mapping as Player-1: GPIO16/17/21/22
 - Uses the same illuminated button outputs: GPIO23/19/18/26
-- Button LEDs are ON while idle and turn OFF while their button is pressed
+- Button LEDs are active-LOW outputs; visible behavior is controller-policy driven while linked
 - Sends unicast ESP-NOW color-shot packets to the controller MAC
 
 **[WARNING]** Do not power high LED counts from USB! Use proper external power supply with adequate wire gauge (14-16 AWG for long strips).
@@ -174,26 +174,28 @@ Defeat the boss by shooting it with matching colors before it reaches your posit
 | WHITE | 22 | Fire WHITE shot (4-color mode only) |
 
 **Current status:**
-- Button LEDs use GPIO23/19/18/26 and are lit until pressed
+- Button LEDs use GPIO23/19/18/26 and are controller-driven by mode policy while link is active
 - Player-2 sends unicast ESP-NOW packets to the controller MAC `84:1F:E8:39:AC:1C`
+- Player-2 receives v2 LED control packets from controller (`LED_STATE`)
+- If controller LED control packets time out, Player-2 falls back to local button feedback
 - Player-2 does not currently send mode, brightness, reset, or settings commands
 - Player-2 is identified by packet magic bytes — no MAC allowlist entry needed
 
 ### Pong Duel Controls
 
-When **PONG DUEL** mode is active:
+When **2 Player - Pong Duel** mode is active:
 - **Local Player-1:** RED button
-- **Local fallback Player-2:** WHITE button
-- **Wireless Player-2:** any WIZ remote color button or any Player-2 controller color button
-- GREEN and BLUE on the main controller are not used for local pong play
+- **Local Player-2 fallback on controller:** disabled
+- **Wireless Player-2:** BLUE only (WIZ remote BLUE or Player-2 BLUE)
+- GREEN/WHITE are ignored for Pong input
 
 ### Wired Settings Mode (Physical Buttons)
 
 You can configure gameplay without the remote:
 
 **Enter settings:**
-- Hold **RED + WHITE** for 1 second
-- Requirement: no shots fired in the last 1 second
+- Hold **RED + WHITE** for 3 seconds
+- Requirement: no shots fired in the last 3 seconds
 
 **Inside settings:**
 - **GREEN**: Mode up
@@ -214,16 +216,16 @@ You can configure gameplay without the remote:
 
 ## Game Modes
 
-Use remote **Off** button to cycle game modes. The strip shows lilac mode-dots for 2 seconds before mode starts.
+Use remote **Off** button to cycle game modes. The strip shows dark yellow/orange-ish mode-dots for 2 seconds before mode starts.
 
-1. **INVERTED** - Button LEDs on when not pressed
-2. **FOLLOW-ME** - Helper shows next target color
-3. **MEMORY** - Sequence playback, then player input
-4. **GHOST BOSS** - Boss visibility challenge
-5. **DUEL** - 2-player versus from both ends
-6. **CO-PLAY** - 2-player cooperative expanding boss
-7. **ALL-VS-ALL** - 2 players versus each other and the boss
-8. **PONG DUEL** - 2-player timing rally on one strip
+1. **1 Player - Normal** - Button LEDs on when not pressed
+2. **1 Player - Follow-Me** - Helper shows next target color
+3. **1 Player - Memory** - Sequence playback, then player input
+4. **1 Player - Ghost Boss** - Boss visibility challenge
+5. **2 Player - Duel** - 2-player versus from both ends
+6. **2 Player - Co-Play** - 2-player cooperative expanding boss
+7. **2 Player - All-vs-All** - 2 players versus each other and the boss
+8. **2 Player - Pong Duel** - 2-player timing rally on one strip
 
 **Mode 7 (ALL-VS-ALL) rules:**
 - Boss expands from center like CO-PLAY

@@ -12,6 +12,7 @@ Current wireless status:
 - Unknown sender MACs are printed on Serial so new remotes can be discovered and added to the allowlist.
 - Remote packet sequence debouncing is tracked per sender slot, so WIZ remote and Player-2 can operate at the same time.
 - Player-2 sends only the 4 color-shot buttons (RED/GREEN/BLUE/WHITE) via unicast to the hardcoded controller MAC.
+- Controller also sends Player-2 control packets (v2 `LED_STATE`) for mode-aware button-light behavior.
 
 ## Current Setup
 
@@ -52,11 +53,15 @@ Inputs (active-low with internal pull-ups):
 - GPIO21: Blue button
 - GPIO22: White button
 
-Outputs (active-LOW, lit when idle, off while button is held):
+Outputs (active-LOW electrical drive; visible behavior is mode-policy driven):
 - GPIO23: Red button LED
 - GPIO19: Green button LED
 - GPIO18: Blue button LED
 - GPIO26: White button LED
+
+Note:
+- During active controller link, Player-2 LEDs follow controller-driven mode policy.
+- If control packets time out, Player-2 falls back to local button feedback.
 
 ## Wiring
 
@@ -74,23 +79,23 @@ Important: ESP32 GND and strip power GND must be connected together.
 
 ## Game Modes (Remote Off cycles)
 
-1. INVERTED
-2. FOLLOW-ME
-3. MEMORY
-4. GHOST BOSS
-5. DUEL
-6. CO-PLAY
-7. ALL-VS-ALL
-8. PONG DUEL
+1. 1 Player - Normal
+2. 1 Player - Follow-Me
+3. 1 Player - Memory
+4. 1 Player - Ghost Boss
+5. 2 Player - Duel
+6. 2 Player - Co-Play
+7. 2 Player - All-vs-All
+8. 2 Player - Pong Duel
 
 Mode indicator:
-- Far-end lilac dots show mode number for 2 seconds before mode starts.
+- Far-end dark yellow (orange-ish) dots show mode number for 2 seconds before mode starts.
 
 ## Wired Settings Mode (Physical Buttons)
 
 Enter settings:
-- Hold RED + WHITE for 1 second
-- Requirement: no shots fired in the last 1 second
+- Hold RED + WHITE for 3 seconds
+- Requirement: no shots fired in the last 3 seconds
 
 In settings:
 - GREEN: mode up
@@ -141,13 +146,16 @@ PlatformIO environments:
 Current Player-2 behavior:
 - 4 active-low buttons on GPIO16/17/21/22
 - 4 illuminated button outputs on GPIO23/19/18/26
-- LEDs are on by default and turn off while the matching button is pressed
+- Sends v1 button-event packets (`0x10..0x13`) to controller
+- Receives v2 control packets (`LED_STATE`) from controller for mode-aware button lights
+- LED behavior is policy-driven per mode (guided-only, press-off, press-on)
+- Local toggle capability exists in protocol support but is not assigned to gameplay modes by default
 - Sends unicast ESP-NOW packets to controller MAC `84:1F:E8:39:AC:1C`
 
 Current Pong Duel behavior:
 - Local Player-1 uses the RED button
-- Local fallback Player-2 uses the WHITE button
-- Wireless Player-2 can use WIZ remote or the Player-2 ESP controller
+- Local controller fallback inputs are disabled for Player-2 side
+- Wireless Player-2 uses BLUE only (WIZ remote BLUE or Player-2 BLUE)
 - Match format is first to 5 points with a center serve and shrinking hit zones
 
 Platform notes:

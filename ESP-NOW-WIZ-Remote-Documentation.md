@@ -1,6 +1,6 @@
 ﻿# ESP-NOW Wireless Control Documentation
 
-**Date:** May 9, 2026
+**Date:** May 31, 2026
 **Project:** RGB Guardian
 **Purpose:** Reference guide for the current ESP-NOW controller and Player-2 implementation
 
@@ -8,12 +8,12 @@
 
 ## Current Hardware Roles
 
-### Controller Receiver
+### Controller Receiver + Player-2 Control Sender
 - Board: Wemos D1 Mini32 (ESP-WROOM-32)
 - Firmware: `src/controller.cpp`
 - COM port: COM25
 - MAC: `84:1F:E8:39:AC:1C`
-- Role: Main LED game controller and ESP-NOW receiver
+- Role: Main LED game controller, ESP-NOW receiver, and Player-2 LED policy sender
 - Serial output shows:
   - Local controller MAC address
   - Configured allowed sender MAC slots (WIZ remotes)
@@ -44,7 +44,7 @@
 - ESP-NOW broadcast receive does not fire in Arduino-ESP32 v3.x / IDF5
 - All packets must be unicast
 - Player-2 uses a hardcoded controller MAC peer (`84:1F:E8:39:AC:1C`, channel 1, `WIFI_IF_STA`)
-- Controller is receive-only (no peer registration needed on controller side)
+- Controller registers a Player-2 peer for outbound control packets (fallback MAC plus dynamic sender rebind)
 
 ### Callback Signatures (IDF5 / Arduino-ESP32 v3.x)
 ```cpp
@@ -67,8 +67,12 @@ void onEspNowSent(const uint8_t *mac_addr, esp_now_send_status_t status);
   - `Byte[6]`: command / button code
 
 ### Player-2 Packet Structure (`include/player2_espnow_packet.h`)
-- Packet length: 5 bytes
-- Fields: magic0='P', magic1='2', version, sequence, buttonCode
+- v1 packet (5 bytes): magic0='P', magic1='2', version=1, sequence, buttonCode
+- v2 packet (8 bytes): magic0, magic1, version=2, packetType, sequence, arg0, arg1, flags
+- Packet types currently used:
+  - `BUTTON_EVENT` for color-shot button ingress
+  - `LED_STATE` for controller-driven Player-2 button-light behavior
+  - `BEEP_CMD` reserved for future predefined sounds
 - Identified by magic bytes — any board running `player-2.cpp` is accepted without MAC registration
 
 ### Button / Command Mapping
@@ -123,6 +127,14 @@ void onEspNowSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 - This avoids one sender overwriting another sender's pending command if buttons are pressed close together
 - If the queue overflows, the controller prints a warning on Serial
 
+### Player-2 LED Control Path
+- Controller computes mode-aware LED policy and sends v2 `LED_STATE` packets on change and heartbeat.
+- `LED_STATE` fields:
+  - `arg0`: base RGBW visible mask
+  - `arg1`: RGBW mask where local press overlay is enabled
+  - `flags`: policy bits (`PRESS_TURNS_OFF`, `PRESS_TURNS_ON`, optional `LOCAL_TOGGLE` support)
+- Controller forces LED control refresh on mode transitions to keep Player-2 behavior aligned immediately.
+
 ---
 
 ## Current Player-2 Behavior
@@ -132,10 +144,11 @@ void onEspNowSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 - Firmware: `src/player-2.cpp`
 - COM port: COM26
 - MAC: `84:1F:E8:39:D2:48`
-- Sends 5-byte Player-2 ESP-NOW packets (unicast)
+- Sends v1 button-event packets (unicast)
 - Uses GPIO16/17/21/22 for active-low button inputs
 - Uses GPIO23/19/18/26 for illuminated button LEDs
-- Button LEDs are ON when idle and OFF while pressed
+- Receives v2 controller LED policy packets and applies mode-aware button-light behavior while fresh
+- Falls back to local button-feedback LED behavior when control packets time out
 
 ### Current Limits
 - Player-2 sends only RED / GREEN / BLUE / WHITE shot commands
@@ -255,5 +268,5 @@ Note: Player-2 does NOT require this workflow — it is auto-accepted by magic b
 
 ---
 
-**Document Version:** 3.0
-**Last Updated:** May 9, 2026
+**Document Version:** 3.1
+**Last Updated:** May 31, 2026
